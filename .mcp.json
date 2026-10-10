@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "digifact": {
+      "type": "sse",
+      "url": "https://documentacion.digifact.com/mcp/sse"
+    }
+  }
+}
