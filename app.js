@@ -10,7 +10,7 @@ const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total
 const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
-const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '1', '17']], RDON: [['1', '4', '4']] };
+const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']] };
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
 const esNota = t => t === 'NCRE' || t === 'NDEB';
 const money = (n, mon = 'GTQ') => (mon === 'USD' ? 'US$ ' : 'Q ') + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -76,7 +76,7 @@ function generarXML(f) {
       </AddressInfo>`;
   let totIva = 0;
   const items = c.lineas.map(l => {
-    const grav = expo ? l.total : Number(r6(l.total / (1 + IVA))), iva = expo ? 0 : Number(r6(l.total - grav));
+    const grav = expo || EXENTOS.has(f.tipo) ? l.total : Number(r6(l.total / (1 + IVA))), iva = expo || EXENTOS.has(f.tipo) ? 0 : Number(r6(l.total - grav));
     totIva += iva;
     return `
     <Item>
@@ -86,10 +86,11 @@ function generarXML(f) {
       <UnitOfMeasure>${l.servicio ? 'SER' : 'UNI'}</UnitOfMeasure>
       <Price>${r6(l.precio)}</Price>
       <Discounts><Discount><Amount>${l.desc.toFixed(2)}</Amount></Discount></Discounts>
-      <Taxes><Tax>
+${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
         <Code>${expo ? 2 : 1}</Code><Description>IVA</Description>
         <TaxableAmount>${r6(grav)}</TaxableAmount><Amount>${r6(iva)}</Amount>
       </Tax></Taxes>
+`}
       <Totals><TotalItem>${r6(l.total)}</TotalItem></Totals>
     </Item>`;
   }).join('');
@@ -127,7 +128,8 @@ function generarXML(f) {
   <Items>${items}
   </Items>
   <Totals>
-    <TotalTaxes><TotalTax><Description>IVA</Description><Amount>${r6(totIva)}</Amount></TotalTax></TotalTaxes>
+    ${EXENTOS.has(f.tipo) ? '' : `<TotalTaxes><TotalTax><Description>IVA</Description><Amount>${r6(totIva)}</Amount></TotalTax></TotalTaxes>
+    `}
     <GrandTotal><InvoiceTotal>${r6(c.total)}</InvoiceTotal></GrandTotal>
   </Totals>
   <AdditionalDocumentInfo>${expo && !esNota(f.tipo) ? `
@@ -440,7 +442,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
