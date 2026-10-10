@@ -4,7 +4,7 @@
 const http = require('http');
 const assert = require('assert');
 
-const llamadas = { login: [], nuc: [] };
+const llamadas = { login: [], nuc: [], anular: [] };
 let tokenActual = 'TOKEN-1', modo = 'ok';
 const falso = http.createServer((req, res) => {
   const trozos = [];
@@ -23,12 +23,24 @@ const falso = http.createServer((req, res) => {
       if (modo === 'error') return res.end(JSON.stringify({ code: 5001, message: 'Error en contenido del XML', description: 'NIT inválido' }));
       return res.end(JSON.stringify({ code: 1, authNumber: 'AAAA-BBBB', batch: 'AAAA', serial: '123', issuedTimeStamp: '2026-01-01T10:00:00', enrolledTimeStamp: '2026-01-01T10:00:05', responseData1: 'eG1s', responseData3: 'cGRm' }));
     }
+    if (url.pathname === '/api/CancelFelGT') {
+      llamadas.anular.push({ auth: req.headers.authorization, tipo: req.headers['content-type'], cuerpo: JSON.parse(cuerpo) });
+      if (req.headers.authorization !== tokenActual) { res.statusCode = 401; return res.end('{}'); }
+      return res.end(JSON.stringify(modo === 'error' ? { code: 9, message: 'No se puede anular' } : { code: 1, message: 'Documento anulado' }));
+    }
     res.statusCode = 404; res.end('{}');
   });
 });
 
 const post = (puerto, cuerpo, cabeceras) => new Promise((resolve, reject) => {
   const req = http.request({ port: puerto, method: 'POST', path: '/api/certificar', headers: cabeceras }, res => {
+    const t = []; res.on('data', c => t.push(c));
+    res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(t).toString() || '{}') }));
+  });
+  req.on('error', reject); req.end(cuerpo);
+});
+const postA = (puerto, cuerpo, cabeceras) => new Promise((resolve, reject) => {
+  const req = http.request({ port: puerto, method: 'POST', path: '/api/anular', headers: cabeceras }, res => {
     const t = []; res.on('data', c => t.push(c));
     res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(t).toString() || '{}') }));
   });
@@ -51,7 +63,7 @@ falso.listen(0, '127.0.0.1', async () => {
       assert.strictEqual(llamadas.login[0].Password, 'secreto');
       assert.strictEqual(llamadas.nuc[0].auth, 'TOKEN-1');
       assert.strictEqual(llamadas.nuc[0].tipo, 'application/xml');
-      assert.strictEqual(llamadas.nuc[0].query.TAXID, '000000123456');
+      assert.strictEqual(llamadas.nuc[0].query.TAXID, '123456');
       assert.strictEqual(llamadas.nuc[0].query.USERNAME, 'USER_TEST');
       assert.ok(!JSON.stringify(r.json).includes('secreto'), 'la respuesta no debe incluir la clave');
       // 2) Token vencido: se vuelve a iniciar sesión una sola vez y se reintenta
@@ -66,7 +78,20 @@ falso.listen(0, '127.0.0.1', async () => {
       assert.strictEqual((await post(p, xml, { 'Content-Type': 'application/json' })).status, 400);
       assert.strictEqual((await post(p, JSON.stringify({ xml: 'hola' }), JSON_H)).status, 400);
       assert.strictEqual((await post(p, '{no es json', JSON_H)).status, 400);
-      console.log('OK    servidor intermedio (flujo, token vencido, errores y defensas)');
+      // 5) Anulación
+      modo = 'ok';
+      const anul = { autorizacion: '5B5BA194-22C5-4377-99D4-B8F86820533D', idReceptor: 'CF', fechaEmision: '2022-10-04T10:25:09', motivo: 'Error en datos' };
+      r = await postA(p, JSON.stringify(anul), JSON_H);
+      assert.strictEqual(r.status, 200); assert.strictEqual(r.json.ok, true);
+      assert.deepStrictEqual(llamadas.anular[0].cuerpo, { Taxid: '123456', Autorizacion: anul.autorizacion, IdReceptor: 'CF', FechaEmisionDocumentoAnular: anul.fechaEmision, MotivoAnulacion: 'Error en datos', Username: 'USER_TEST' });
+      assert.strictEqual(llamadas.anular[0].tipo, 'application/json');
+      modo = 'error';
+      r = await postA(p, JSON.stringify(anul), JSON_H);
+      assert.strictEqual(r.status, 422); assert.strictEqual(r.json.ok, false); assert.strictEqual(r.json.mensaje, 'No se puede anular');
+      assert.strictEqual((await postA(p, JSON.stringify({ ...anul, autorizacion: 'x' }), JSON_H)).status, 400);
+      assert.strictEqual((await postA(p, JSON.stringify({ ...anul, motivo: '  ' }), JSON_H)).status, 400);
+      assert.strictEqual((await postA(p, JSON.stringify(anul), { 'Content-Type': 'application/json' })).status, 400);
+      console.log('OK    servidor intermedio (certificar, anular, token vencido, errores y defensas)');
     } catch (e) {
       console.log('FALLA servidor intermedio\n' + e.message); process.exitCode = 1;
     } finally { servidor.close(); falso.close(); }

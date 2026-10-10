@@ -565,6 +565,7 @@ function vistaFactura(id) {
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${XML_TIPOS.includes(f.tipo) && !f.certificacion && !f.anulada ? '<button class="btn primary" id="cert">Certificar con Digifact</button>' : ''}
     ${f.certificacion && f.certificacion.pdf ? '<button class="btn" id="pdfc">Descargar PDF certificado</button>' : ''}
+    ${f.certificacion && !f.anulada ? '<button class="btn danger" id="anular">Anular ante la SAT</button>' : ''}
     ${f.anulada || f.certificacion ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
   </div>`;
@@ -582,6 +583,21 @@ function vistaFactura(id) {
       f.certificacion = { autorizacion: j.autorizacion, serie: j.serie, numero: j.numero, fecha: j.certificacion, pdf: j.pdf };
       guardar(); toast('Documento certificado'); vistaFactura(id);
     } catch { libre(); toast('No se pudo conectar con el servidor. Inicia la app con: node server.js'); }
+  };
+  const an = $('anular');
+  if (an) an.onclick = async () => {
+    const motivo = (prompt('Motivo de la anulación (obligatorio):') || '').trim();
+    if (!motivo) return;
+    if (!confirm(`Se anulará ante la SAT el documento ${f.certificacion.serie}-${f.certificacion.numero}. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+    an.disabled = true;
+    try {
+      const r = await fetch('/api/anular', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'facturador' },
+        body: JSON.stringify({ autorizacion: f.certificacion.autorizacion, idReceptor: f.cliente.nit, fechaEmision: fechaGT(f.fecha).slice(0, 19), motivo }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { an.disabled = false; return toast('No se pudo anular' + (j.mensaje ? ': ' + j.mensaje : '') + (j.descripcion ? ' · ' + j.descripcion : '')); }
+      f.anulada = true; f.anulacion = { motivo, fecha: new Date().toISOString() };
+      guardar(); toast('Documento anulado ante la SAT'); vistaFactura(id);
+    } catch { an.disabled = false; toast('No se pudo conectar con el servidor. Inicia la app con: node server.js'); }
   };
   const pc = $('pdfc');
   if (pc) pc.onclick = () => {

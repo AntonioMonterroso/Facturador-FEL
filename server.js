@@ -3,6 +3,7 @@
  * Servidor local del Facturador FEL (sin dependencias).
  *  - Sirve la app (index.html, styles.css, app.js).
  *  - POST /api/certificar  { xml }  -> envía el NUC-XML a Digifact y devuelve la autorización.
+ *  - POST /api/anular      { autorizacion, idReceptor, fechaEmision, motivo } -> anula un documento certificado.
  * Las credenciales viven solo en variables de entorno de este proceso; nunca llegan al navegador.
  *
  * Variables de entorno:
@@ -74,12 +75,17 @@ async function obtenerToken(forzar) {
   return valor;
 }
 
+/** Ejecuta una petición con token; si Digifact responde 401 renueva el token y reintenta una sola vez. */
+async function conToken(enviar) {
+  let r = await enviar(await obtenerToken(false));
+  if (r.status === 401) r = await enviar(await obtenerToken(true));
+  return r;
+}
+
 async function certificar(xml) {
   const { usuario, nit } = credenciales();
-  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit12(nit))}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
-  const enviar = async tk => pedir(url, { method: 'POST', headers: { 'Content-Type': 'application/xml', Authorization: tk }, cuerpo: xml });
-  let r = await enviar(await obtenerToken(false));
-  if (r.status === 401) r = await enviar(await obtenerToken(true)); // token vencido: un reintento
+  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit)}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
+  const r = await conToken(tk => pedir(url, { method: 'POST', headers: { 'Content-Type': 'application/xml', Authorization: tk }, cuerpo: xml }));
   let j;
   try { j = JSON.parse(r.texto); } catch { throw Object.assign(new Error('Respuesta inesperada de Digifact (HTTP ' + r.status + ')'), { status: 502 }); }
   if (Number(j.code) !== 1) {
@@ -93,6 +99,22 @@ async function certificar(xml) {
       xml: j.responseData1 || '', pdf: j.responseData3 || ''
     }
   };
+}
+
+const RE_AUTORIZACION = /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/;
+const RE_FECHA = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/;
+
+/** Anula un documento certificado (POST /api/CancelFelGT). El formato de la respuesta está por verificar con Digifact real. */
+async function anular({ autorizacion, idReceptor, fechaEmision, motivo }) {
+  const { usuario, nit } = credenciales();
+  const cuerpo = JSON.stringify({ Taxid: nit, Autorizacion: autorizacion, IdReceptor: idReceptor, FechaEmisionDocumentoAnular: fechaEmision, MotivoAnulacion: motivo, Username: usuario });
+  const r = await conToken(tk => pedir(BASE + '/api/CancelFelGT', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: tk }, cuerpo }));
+  let j = {};
+  try { j = JSON.parse(r.texto); } catch { /* respuesta no JSON */ }
+  const codigo = j.code ?? j.Code;
+  // Si Digifact devuelve un código, 1 significa éxito (igual que al certificar); si no, se toma el estado HTTP.
+  const ok = r.status === 200 && (codigo === undefined || Number(codigo) === 1);
+  return { status: ok ? 200 : 422, cuerpo: { ok, codigo, mensaje: j.message || j.Message || '', descripcion: j.description || j.Description || '', respuesta: j } };
 }
 
 function leerCuerpo(req) {
@@ -123,6 +145,20 @@ const servidor = http.createServer(async (req, res) => {
       try { datos = JSON.parse(await leerCuerpo(req)); } catch (e) { if (e.status) throw e; return responder(res, 400, { ok: false, mensaje: 'JSON inválido' }); }
       if (typeof datos.xml !== 'string' || !datos.xml.includes('<Root>')) return responder(res, 400, { ok: false, mensaje: 'Falta el XML del documento' });
       const r = await certificar(datos.xml);
+      return responder(res, r.status, r.cuerpo);
+    }
+    if (req.method === 'POST' && ruta === '/api/anular') {
+      if (!(req.headers['content-type'] || '').startsWith('application/json') || req.headers['x-requested-with'] !== 'facturador') {
+        return responder(res, 400, { ok: false, mensaje: 'Petición no permitida' });
+      }
+      let d;
+      try { d = JSON.parse(await leerCuerpo(req)); } catch (e) { if (e.status) throw e; return responder(res, 400, { ok: false, mensaje: 'JSON inválido' }); }
+      const motivo = typeof d.motivo === 'string' ? d.motivo.trim() : '';
+      if (!RE_AUTORIZACION.test(d.autorizacion || '')) return responder(res, 400, { ok: false, mensaje: 'Número de autorización inválido' });
+      if (!RE_FECHA.test(d.fechaEmision || '')) return responder(res, 400, { ok: false, mensaje: 'Fecha de emisión inválida' });
+      if (typeof d.idReceptor !== 'string' || !d.idReceptor.trim() || d.idReceptor.length > 20) return responder(res, 400, { ok: false, mensaje: 'Receptor inválido' });
+      if (!motivo || motivo.length > 200) return responder(res, 400, { ok: false, mensaje: 'Indica el motivo de la anulación (máximo 200 caracteres)' });
+      const r = await anular({ autorizacion: d.autorizacion, idReceptor: d.idReceptor.trim(), fechaEmision: d.fechaEmision, motivo });
       return responder(res, r.status, r.cuerpo);
     }
     if (req.method === 'GET' && ESTATICOS[ruta]) {
