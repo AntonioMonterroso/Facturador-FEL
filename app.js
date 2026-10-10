@@ -4,13 +4,16 @@
 const IVA = 0.12;
 const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación' };
 const EXENTOS = new Set(['NABN', 'RDON']); // sin IVA
-const calcF = f => calcular(f.items, EXENTOS.has(f.tipo));
+const calcF = f => calcular(f.items, EXENTOS.has(f.tipo) || !!f.exportacion); // exportación: IVA 0%
+const INCOTERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'];
+const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total }];
+const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
 const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '1', '17']], RDON: [['1', '4', '4']] };
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
 const esNota = t => t === 'NCRE' || t === 'NDEB';
-const money = n => 'Q ' + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = (n, mon = 'GTQ') => (mon === 'USD' ? 'US$ ' : 'Q ') + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); })).toUpperCase();
@@ -66,13 +69,14 @@ const r6 = n => (Math.round((n + Number.EPSILON) * 1e6) / 1e6).toFixed(6);
 const fechaGT = iso => new Date(new Date(iso).getTime() - 6 * 3600e3).toISOString().slice(0, 19) + '-06:00';
 
 function generarXML(f) {
-  const e = S.emisor, x = esc, c = calcF(f);
+  const e = S.emisor, x = esc, c = calcF(f), expo = f.exportacion;
+  const fr = FRASES[f.tipo] && (expo ? [...FRASES[f.tipo], ['2', '4', '1']] : FRASES[f.tipo]);
   const dir = (d, cp, mun, dep) => `<AddressInfo>
         <Address>${x(d)}</Address><City>${x(cp)}</City><District>${x(mun)}</District><State>${x(dep)}</State><Country>GT</Country>
       </AddressInfo>`;
   let totIva = 0;
   const items = c.lineas.map(l => {
-    const grav = Number(r6(l.total / (1 + IVA))), iva = Number(r6(l.total - grav));
+    const grav = expo ? l.total : Number(r6(l.total / (1 + IVA))), iva = expo ? 0 : Number(r6(l.total - grav));
     totIva += iva;
     return `
     <Item>
@@ -83,7 +87,7 @@ function generarXML(f) {
       <Price>${r6(l.precio)}</Price>
       <Discounts><Discount><Amount>${l.desc.toFixed(2)}</Amount></Discount></Discounts>
       <Taxes><Tax>
-        <Code>1</Code><Description>IVA</Description>
+        <Code>${expo ? 2 : 1}</Code><Description>IVA</Description>
         <TaxableAmount>${r6(grav)}</TaxableAmount><Amount>${r6(iva)}</Amount>
       </Tax></Taxes>
       <Totals><TotalItem>${r6(l.total)}</TotalItem></Totals>
@@ -96,17 +100,18 @@ function generarXML(f) {
   <Header>
     <DocType>${x(f.tipo)}</DocType>
     <IssuedDateTime>${fechaGT(f.fecha)}</IssuedDateTime>
-    <Currency>GTQ</Currency>
+    <Currency>${monedaDe(f)}</Currency>
+    ${expo ? '<AdditionalIssueDocInfo><Info Name="Exp" Value="SI"/></AdditionalIssueDocInfo>' : ''}
   </Header>
   <Seller>
     <TaxID>${x(e.nit)}</TaxID>
     <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="GEN"/></TaxIDAdditionalInfo>
     <Name>${x(e.nombre)}</Name>
     ${e.correo ? `<Contact><EmailList><Email>${x(e.correo)}</Email></EmailList></Contact>` : ''}
-    <AdditionlInfo>
-      <Info Name="TipoFrase" Data="1" Value="1"/>
-      <Info Name="Escenario" Data="1" Value="1"/>
-    </AdditionlInfo>
+    ${fr ? `<AdditionlInfo>${fr.map(([d, t, es]) => `
+      <Info Name="TipoFrase" Data="${d}" Value="${t}"/>
+      <Info Name="Escenario" Data="${d}" Value="${es}"/>`).join('')}
+    </AdditionlInfo>` : ''}
     <BranchInfo>
       <Code>1</Code>
       <Name>${x(e.comercial || e.nombre)}</Name>
@@ -114,7 +119,7 @@ function generarXML(f) {
     </BranchInfo>
   </Seller>
   <Buyer>
-    <TaxID>${x(f.cliente.nit)}</TaxID>
+    <TaxID>${x(f.cliente.nit)}</TaxID>${esCUI(f.cliente.nit) ? '\n    <TaxIDType>CUI</TaxIDType>' : ''}
     <Name>${x(f.cliente.nombre)}</Name>
     ${f.cliente.correo ? `<Contact><EmailList><Email>${x(f.cliente.correo)}</Email></EmailList></Contact>` : ''}
     ${dir(f.cliente.direccion || 'Ciudad', '01001', 'Guatemala', 'Guatemala')}
@@ -125,7 +130,38 @@ function generarXML(f) {
     <TotalTaxes><TotalTax><Description>IVA</Description><Amount>${r6(totIva)}</Amount></TotalTax></TotalTaxes>
     <GrandTotal><InvoiceTotal>${r6(c.total)}</InvoiceTotal></GrandTotal>
   </Totals>
-  <AdditionalDocumentInfo>
+  <AdditionalDocumentInfo>${expo && !esNota(f.tipo) ? `
+    <AdditionalInfo>
+      <Code>EXP</Code>
+      <Type>COMPLEMENTO</Type>
+      <AditionalInfo>
+        <Info Name="NombreConsignatarioODestinatario" Value="${x(expo.destinatario)}"/>
+        <Info Name="DireccionConsignatarioODestinatario" Value="${x(expo.direccion)}"/>
+        <Info Name="INCOTERM" Data="" Value="${x(expo.incoterm)}"/>
+      </AditionalInfo>
+    </AdditionalInfo>` : ''}${f.tipo === 'FCAM' ? `
+    <AdditionalInfo>
+      <Code>FCAMB</Code>
+      <Type>COMPLEMENTO</Type>
+      <AditionalData>${abonosDe(f).map((a, i) => `
+        <Data>
+          <Info Name="NumeroAbono" Value="${i + 1}"/>
+          <Info Name="FechaVencimiento" Value="${x(a.fecha)}"/>
+          <Info Name="MontoAbono" Value="${Number(a.monto).toFixed(2)}"/>
+        </Data>`).join('')}
+      </AditionalData>
+    </AdditionalInfo>` : ''}${esNota(f.tipo) ? `
+    <AdditionalInfo>
+      <Code>${f.tipo}</Code>
+      <Type>COMPLEMENTO</Type>
+      <AditionalInfo>
+        <Info Name="NumeroAutorizacionDocumentoOrigen" Value="${x(f.origen.autorizacion)}"/>
+        <Info Name="FechaEmisionDocumentoOrigen" Value="${x(f.origen.fecha)}"/>${f.origen.motivo ? `
+        <Info Name="MotivoAjuste" Value="${x(f.origen.motivo)}"/>` : ''}
+        <Info Name="SerieDocumentoOrigen" Value="${x(f.origen.autorizacion.slice(0, 8))}"/>
+        <Info Name="NumeroDocumentoOrigen" Value="${x(f.origen.numero)}"/>
+      </AditionalInfo>
+    </AdditionalInfo>` : ''}
     <AdditionalInfo>
       <Code>${x(f.uuid)}</Code>
       <Type>ADENDA</Type>
@@ -140,16 +176,16 @@ function generarXML(f) {
 function generarJSON(f) {
   const e = S.emisor, c = calcF(f);
   const dir = (d, cp, mun, dep) => ({ Address: d, City: cp, District: mun, State: dep, Country: 'GT' });
-  const exento = EXENTOS.has(f.tipo);
+  const exento = EXENTOS.has(f.tipo), expo = f.exportacion;
   let totIva = 0, totGrav = 0;
   const Items = c.lineas.map((l, i) => {
-    const grav = exento ? l.total : Number(r6(l.total / (1 + IVA))), iva = exento ? 0 : Number(r6(l.total - grav));
+    const grav = exento || expo ? l.total : Number(r6(l.total / (1 + IVA))), iva = exento || expo ? 0 : Number(r6(l.total - grav));
     totIva += iva; totGrav += grav;
     return {
       Number: String(i + 1), Codes: null, Type: l.servicio ? 'Servicio' : 'Bien', Description: l.descripcion,
       Qty: r6(l.cantidad), UnitOfMeasure: l.servicio ? 'SER' : 'UNI', Price: r6(l.precio),
       Discounts: { Discount: [{ Amount: l.desc.toFixed(2) }] },
-      Taxes: exento ? null : { Tax: [{ Code: '1', Description: 'IVA', TaxableAmount: r6(grav), Amount: r6(iva) }] },
+      Taxes: exento ? null : { Tax: [{ Code: expo ? '2' : '1', Description: 'IVA', TaxableAmount: r6(grav), Amount: r6(iva) }] },
       Totals: { TotalItem: r6(l.total) }
     };
   });
@@ -157,23 +193,31 @@ function generarJSON(f) {
   if (f.cliente.correo) Buyer.Contact = { EmailList: { Email: [f.cliente.correo] } };
   return JSON.stringify({
     Version: '1.00', CountryCode: 'GT',
-    Header: { DocType: f.tipo, IssuedDateTime: fechaGT(f.fecha), Currency: 'GTQ', ...(f.tipo === 'RDON' ? { AdditionalIssueDocInfo: [{ Name: 'TipoPersoneria', Data: null, Value: f.personeria }] } : {}) },
+    Header: { DocType: f.tipo, IssuedDateTime: fechaGT(f.fecha), Currency: monedaDe(f), ...(f.tipo === 'RDON' ? { AdditionalIssueDocInfo: [{ Name: 'TipoPersoneria', Data: null, Value: f.personeria }] } : expo ? { AdditionalIssueDocInfo: [{ Name: 'Exp', Data: null, Value: 'SI' }] } : {}) },
     Seller: {
       TaxID: e.nit, TaxIDAdditionalInfo: [{ Name: 'AfiliacionIVA', Data: null, Value: 'GEN' }], Name: e.nombre,
       ...(e.correo ? { Contact: { EmailList: { Email: [e.correo] } } } : {}),
-      ...(FRASES[f.tipo] ? { AdditionlInfo: FRASES[f.tipo].flatMap(([d, tf, esc]) => [{ Name: 'TipoFrase', Data: d, Value: tf }, { Name: 'Escenario', Data: d, Value: esc }]) } : {}),
+      ...(FRASES[f.tipo] ? { AdditionlInfo: (expo ? [...FRASES[f.tipo], ['2', '4', '1']] : FRASES[f.tipo]).flatMap(([d, tf, esc]) => [{ Name: 'TipoFrase', Data: d, Value: tf }, { Name: 'Escenario', Data: d, Value: esc }]) } : {}),
       BranchInfo: { Code: '1', Name: e.comercial || e.nombre, AddressInfo: dir(e.direccion, e.codigoPostal || '01001', e.municipio || 'Guatemala', e.departamento || 'Guatemala') }
     },
     Buyer, ThirdParties: null, Items,
     Totals: { ...(exento ? {} : { TotalTaxes: { TotalTax: [{ Description: 'IVA', Amount: r6(totIva) }] } }), GrandTotal: { InvoiceTotal: r6(c.total) } },
     AdditionalDocumentInfo: { AdditionalInfo: [
+      ...(expo && !esNota(f.tipo) ? [{
+        Code: 'EXP', Type: 'COMPLEMENTO',
+        AditionalInfo: [
+          { Name: 'NombreConsignatarioODestinatario', Data: null, Value: expo.destinatario },
+          { Name: 'DireccionConsignatarioODestinatario', Data: null, Value: expo.direccion },
+          { Name: 'INCOTERM', Data: '', Value: expo.incoterm }
+        ]
+      }] : []),
       ...(f.tipo === 'FCAM' ? [{
         Code: 'FCAMB', Type: 'COMPLEMENTO',
-        AditionalData: { Data: [{ Info: [
-          { Name: 'NumeroAbono', Data: null, Value: '1' },
-          { Name: 'FechaVencimiento', Data: null, Value: f.vencimiento },
-          { Name: 'MontoAbono', Data: null, Value: c.total.toFixed(2) }
-        ] }] }
+        AditionalData: { Data: abonosDe(f).map((a, i) => ({ Info: [
+          { Name: 'NumeroAbono', Data: null, Value: String(i + 1) },
+          { Name: 'FechaVencimiento', Data: null, Value: a.fecha },
+          { Name: 'MontoAbono', Data: null, Value: Number(a.monto).toFixed(2) }
+        ] })) }
       }] : []),
       ...(f.tipo === 'FESP' ? [{
         Code: 'FESP', Type: 'COMPLEMENTO',
@@ -188,7 +232,7 @@ function generarJSON(f) {
         AditionalInfo: [
           { Name: 'NumeroAutorizacionDocumentoOrigen', Data: null, Value: f.origen.autorizacion },
           { Name: 'FechaEmisionDocumentoOrigen', Data: null, Value: f.origen.fecha },
-          { Name: 'MotivoAjuste', Data: null, Value: f.origen.motivo },
+          ...(f.origen.motivo ? [{ Name: 'MotivoAjuste', Data: null, Value: f.origen.motivo }] : []),
           { Name: 'SerieDocumentoOrigen', Data: null, Value: f.origen.autorizacion.slice(0, 8) },
           { Name: 'NumeroDocumentoOrigen', Data: null, Value: f.origen.numero }
         ]
@@ -211,7 +255,7 @@ const vigentes = () => S.facturas.filter(f => !f.anulada);
 
 function vistaResumen() {
   const hoy = new Date(), mes = hoy.toISOString().slice(0, 7);
-  const v = vigentes().map(f => ({ f, c: calcF(f) }));
+  const v = vigentes().filter(f => monedaDe(f) === 'GTQ').map(f => ({ f, c: calcF(f) }));
   const sgn = x => (x.f.tipo === 'NCRE' ? -1 : 1);
   const del = v.filter(x => x.f.fecha.startsWith(mes));
   const sum = (arr, k) => r2(arr.reduce((a, x) => a + sgn(x) * x.c[k], 0));
@@ -238,7 +282,7 @@ function tablaFacturas(lista) {
   if (!lista.length) return '<p class="empty">Aún no hay documentos.</p>';
   return `<div class="table-wrap"><table><thead><tr><th>Documento</th><th>Fecha</th><th>Cliente</th><th class="r">Total</th><th>Estado</th><th></th></tr></thead><tbody>
     ${lista.map(f => `<tr><td>${esc(TIPOS[f.tipo])} ${esc(f.serie)}-${f.numero}</td><td>${esc(f.fecha.slice(0, 10))}</td><td>${esc(f.cliente.nombre)}</td>
-    <td class="r">${money(calcF(f).total)}</td>
+    <td class="r">${money(calcF(f).total, monedaDe(f))}</td>
     <td><span class="badge ${f.anulada ? 'bad' : 'ok'}">${f.anulada ? 'Anulada' : 'Emitida'}</span></td>
     <td><a class="btn sm" href="#/factura/${esc(f.uuid)}">Ver</a></td></tr>`).join('')}</tbody></table></div>`;
 }
@@ -261,13 +305,20 @@ function vistaNueva() {
     <div class="grid two">
       <div><label for="tipo">Tipo de documento</label><select id="tipo">${Object.entries(TIPOS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div>
       <div><label for="cli">Cliente guardado</label><select id="cli"><option value="">— Consumidor final —</option>${S.clientes.map((c, i) => `<option value="${i}">${esc(c.nombre)} (${esc(c.nit)})</option>`).join('')}</select></div>
+      <div id="expo" style="grid-column:1/-1"><label><input type="checkbox" id="xc" style="width:auto"> Exportación (IVA 0%)</label>
+        <div id="xf" class="grid two" hidden style="margin-top:8px">
+          <div><label for="xd">Consignatario / destinatario</label><input id="xd"></div>
+          <div><label for="xr">Dirección del destinatario</label><input id="xr"></div>
+          <div><label for="xi">INCOTERM</label><select id="xi">${INCOTERMS.map(i => `<option>${i}</option>`).join('')}</select></div>
+          <div><label for="xm">Moneda</label><select id="xm"><option value="USD">USD</option><option value="GTQ">GTQ</option></select></div>
+        </div></div>
       <div id="pers" hidden><label for="pf">Tipo de personería (RDON)</label><input id="pf" value="734" inputmode="numeric"></div>
-      <div id="venc" hidden><label for="vf">Vencimiento (factura cambiaria)</label><input id="vf" type="date"></div>
+      <div id="venc" hidden style="grid-column:1/-1"><label>Abonos (factura cambiaria)</label><div id="abs"></div><button type="button" class="btn sm" id="abAdd">+ Abono</button><div class="hint">Con un solo abono se cobra el total; con varios, la suma debe igualar el total.</div></div>
       <div id="orig" class="grid two" hidden style="grid-column:1/-1">
         <div><label for="oa">Autorización del documento origen</label><input id="oa" autocomplete="off"></div>
         <div><label for="on">Número del documento origen</label><input id="on" inputmode="numeric"></div>
         <div><label for="of">Fecha de emisión del origen</label><input id="of" type="date"></div>
-        <div><label for="om">Motivo del ajuste</label><input id="om"></div>
+        <div><label for="om">Motivo del ajuste (opcional)</label><input id="om"></div>
       </div>
       <div><label for="nit">NIT o CUI del receptor</label><input id="nit" value="CF" autocomplete="off"><div class="err" id="nitErr"></div></div>
       <div><label for="nom">Nombre del receptor</label><input id="nom" value="Consumidor Final"></div>
@@ -292,9 +343,10 @@ function vistaNueva() {
     totales();
   };
   const totales = () => {
-    const c = calcular(items, EXENTOS.has($('tipo').value));
-    $('tot').innerHTML = `<div><span>Subtotal sin IVA</span><span>${money(c.gravable)}</span></div><div><span>IVA 12%</span><span>${money(c.iva)}</span></div><div class="grand"><span>Total</span><span>${money(c.total)}</span></div>`;
-    rows.querySelectorAll('tr').forEach((tr, i) => { const t = tr.querySelector('[data-t]'); if (t) t.textContent = money(c.lineas[i].total); });
+    const expo = expoOn(), mon = expo ? $('xm').value : 'GTQ';
+    const c = calcular(items, EXENTOS.has($('tipo').value) || expo);
+    $('tot').innerHTML = `<div><span>Subtotal sin IVA</span><span>${money(c.gravable, mon)}</span></div><div><span>IVA ${expo ? '0% (exportación)' : '12%'}</span><span>${money(c.iva, mon)}</span></div><div class="grand"><span>Total</span><span>${money(c.total, mon)}</span></div>`;
+    rows.querySelectorAll('tr').forEach((tr, i) => { const t = tr.querySelector('[data-t]'); if (t) t.textContent = money(c.lineas[i].total, mon); });
   };
   rows.addEventListener('input', e => {
     const tr = e.target.closest('tr'); if (!tr) return;
@@ -307,29 +359,50 @@ function vistaNueva() {
     if (items.length > 1) { items.splice(e.target.closest('tr').dataset.i, 1); pintarFilas(); }
   });
   $('add').onclick = () => { items.push({ descripcion: '', cantidad: 1, precio: 0, descuento: 0, servicio: false }); pintarFilas(); };
-  $('vf').value = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
-  $('tipo').onchange = () => { $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; totales(); };
+  const abonos = [{ fecha: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10), monto: 0 }];
+  const pintarAbonos = () => {
+    $('abs').innerHTML = abonos.map((a, i) => `<div class="grid two" style="grid-template-columns:1fr 1fr auto;margin-bottom:6px" data-a="${i}">
+      <input type="date" data-f="fecha" value="${a.fecha}" aria-label="Fecha de vencimiento">
+      <input type="number" min="0" step="0.01" data-f="monto" value="${a.monto || ''}" placeholder="Monto" aria-label="Monto del abono" ${abonos.length === 1 ? 'disabled' : ''}>
+      ${abonos.length > 1 ? '<button type="button" class="btn sm danger" data-q aria-label="Quitar abono">✕</button>' : '<span></span>'}</div>`).join('');
+  };
+  $('abs').addEventListener('input', e => { const d = e.target.closest('[data-a]'); if (d) abonos[d.dataset.a][e.target.dataset.f] = e.target.dataset.f === 'monto' ? parseFloat(e.target.value) || 0 : e.target.value; });
+  $('abs').addEventListener('click', e => { if (e.target.closest('[data-q]')) { abonos.splice(e.target.closest('[data-a]').dataset.a, 1); pintarAbonos(); } });
+  $('abAdd').onclick = () => { abonos.push({ fecha: abonos[abonos.length - 1].fecha, monto: 0 }); pintarAbonos(); };
+  pintarAbonos();
+  const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
+  $('xm').onchange = () => totales();
+  $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
+  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; totales(); };
   $('cli').onchange = e => {
     const c = S.clientes[e.target.value];
     $('nit').value = c ? c.nit : 'CF'; $('nom').value = c ? c.nombre : 'Consumidor Final';
   };
   $('nit').oninput = () => { const n = normNIT($('nit').value); $('nitErr').textContent = validarNIT(n) || esCUI(n) ? '' : 'NIT inválido (revisa el dígito verificador) o CUI de 13 dígitos'; };
 
+  const tipo0 = () => $('tipo').value;
   $('form').onsubmit = e => {
     e.preventDefault();
     const nit = normNIT($('nit').value), nombre = $('nom').value.trim();
     if (!validarNIT(nit) && !esCUI(nit)) return toast('El NIT o CUI del receptor no es válido');
     if (!nombre) return toast('Falta el nombre del receptor');
     if (items.some(i => !i.descripcion.trim() || !(i.cantidad > 0))) return toast('Completa la descripción y cantidad de cada línea');
-    const c = calcular(items, EXENTOS.has($('tipo').value));
+    const expo = expoOn();
+    const c = calcular(items, EXENTOS.has(tipo0()) || expo);
     if (c.total <= 0) return toast('El total debe ser mayor a cero');
     if (nit === 'CF' && c.total > 2500) return toast('Consumidor final: máximo Q2,500 por documento. Indica un NIT.');
     const tipo = $('tipo').value, serie = S.emisor.serie || 'FACE-A';
     const k = serie + '|' + tipo;
     const f = { uuid: uuid(), tipo, serie, numero: 0, fecha: new Date().toISOString(), cliente: { nit, nombre, direccion: '' }, items: items.map(i => ({ ...i, descripcion: i.descripcion.trim() })), anulada: false };
     if (tipo === 'FCAM') {
-      f.vencimiento = $('vf').value;
-      if (!f.vencimiento || f.vencimiento < f.fecha.slice(0, 10)) return toast('Indica una fecha de vencimiento válida');
+      f.abonos = abonos.map(a => ({ fecha: a.fecha, monto: abonos.length === 1 ? c.total : r2(a.monto) }));
+      const hoy = f.fecha.slice(0, 10);
+      if (f.abonos.some(a => !a.fecha || a.fecha < hoy)) return toast('Indica una fecha de vencimiento válida en cada abono');
+      if (Math.abs(f.abonos.reduce((t, a) => t + a.monto, 0) - c.total) > 0.005) return toast('La suma de los abonos debe ser igual al total');
+    }
+    if (expo) {
+      f.exportacion = { destinatario: $('xd').value.trim(), direccion: $('xr').value.trim(), incoterm: $('xi').value, moneda: $('xm').value };
+      if (!esNota(tipo) && (!f.exportacion.destinatario || !f.exportacion.direccion)) return toast('Indica el destinatario y su dirección para la exportación');
     }
     if (tipo === 'RDON') {
       f.personeria = $('pf').value.trim();
@@ -338,7 +411,7 @@ function vistaNueva() {
     if (esNota(tipo)) {
       f.origen = { autorizacion: $('oa').value.trim().toUpperCase(), numero: $('on').value.trim(), fecha: $('of').value, motivo: $('om').value.trim() };
       const o = f.origen;
-      if (!/^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$/.test(o.autorizacion) || !/^\d+$/.test(o.numero) || !o.fecha || !o.motivo) return toast('Completa los datos del documento origen (autorización UUID, número, fecha y motivo)');
+      if (!/^[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}$/.test(o.autorizacion) || !/^\d+$/.test(o.numero) || !o.fecha) return toast('Completa los datos del documento origen (autorización UUID, número y fecha)');
     }
     S.correlativo[k] = (S.correlativo[k] || 0) + 1;
     f.numero = S.correlativo[k];
@@ -367,7 +440,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${f.tipo !== 'FACT' ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
