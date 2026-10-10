@@ -15,10 +15,9 @@
  *   DIGIFACT_FORMAT       FORMAT de la consulta (por defecto XML|HTML|PDF; sin confirmar el separador)
  *   DIGIFACT_LOGIN_PATH   ruta para pedir el token (por defecto /api/login/get_token)
  *   DIGIFACT_LOGIN_USER   usuario completo del login (por defecto GT.<NIT de 12 dígitos>.<USUARIO>)
- *   La respuesta del login trae { "token": "..." } (se acepta también Token).
- *   Por verificar con Digifact real: si TAXID va con 12 dígitos, qué valores admite FORMAT y cómo se envía el token
- *   (aquí va tal cual en la cabecera Authorization).
- *   PORT, HOST            (por defecto 3000 y 127.0.0.1)
+ *   Login confirmado con la documentación de Digifact: la respuesta trae { "token": "..." } (se acepta también Token),
+ *   el token va tal cual en la cabecera Authorization y al vencer la API responde 401 (aquí se renueva y se reintenta).
+ *   Por verificar con Digifact real: si TAXID va con 12 dígitos al certificar y qué valores admite FORMAT.
  */
 const http = require('http');
 const https = require('https');

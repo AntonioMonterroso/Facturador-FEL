@@ -42,9 +42,13 @@ npm test
 Valida el XML contra `docs/NUCSchema.xsd` (requiere `xmllint`), el JSON contra `docs/NUCSchema.json`
 (requiere Python con `jsonschema`) y el servidor contra un Digifact **simulado**.
 
+## Confirmado con la documentación de Digifact
+
+- Login (`/api/login/get_token`): usuario `GT.<NIT de 12 dígitos>.<usuario>`, respuesta `token`, cabecera `Authorization` y 401 al vencer.
+
 ## Pendiente de confirmar contra Digifact real
 
-- Separador de `FORMAT` al certificar (se usa `XML|HTML|PDF`; configurable con `DIGIFACT_FORMAT`).
+- `TAXID` de 12 dígitos al certificar (así va en las consultas) y separador de `FORMAT` al certificar (se usa `XML|HTML|PDF`; configurable con `DIGIFACT_FORMAT`).
 - Formato exacto de la respuesta de la anulación.
 - Códigos de documento: la documentación lista `FACM` para la cambiaria y los ejemplos usan `FCAM`.
 - Tipo de ítem: la documentación pide `BIEN`/`SERVICIO` y los ejemplos usan `Bien`/`Servicio`.
