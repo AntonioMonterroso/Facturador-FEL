@@ -2,15 +2,21 @@
 
 /* ---------- Utilidades ---------- */
 const IVA = 0.12;
-const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación', RECI: 'Recibo' };
-const EXENTOS = new Set(['NABN', 'RDON', 'RECI']); // sin IVA
+const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación', RECI: 'Recibo', FPEC: 'Factura pequeño contribuyente', FCPC: 'Cambiaria pequeño contribuyente' };
+const EXENTOS = new Set(['NABN', 'RDON', 'RECI', 'FPEC', 'FCPC']); // sin IVA
 const calcF = f => calcular(f.items, EXENTOS.has(f.tipo) || !!f.exportacion); // exportación: IVA 0%
 const INCOTERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'];
 const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total }];
 const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
-const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']] };
+const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']], FPEC: [['1', '3', '1'], ['2', '11', '1']], FCPC: [['1', '3', '1'], ['2', '11', '1']] };
+const AFILIACION = { FPEC: 'PEC', FCPC: 'PEC' }; // el resto va como GEN
+const esCambiaria = t => t === 'FCAM' || t === 'FCPC';
+const NUM_ACCESO = new Set(['FPEC', 'FCPC']);
+const numAcceso = () => String(100000000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000000);
+/** Datos de cabecera adicionales: [nombre, valor]. */
+const infoCab = f => [...(f.tipo === 'RDON' ? [['TipoPersoneria', f.personeria]] : []), ...(f.exportacion ? [['Exp', 'SI']] : []), ...(f.numeroAcceso ? [['NumeroAcceso', f.numeroAcceso]] : [])];
 /** Datos opcionales del recibo que viajan en la adenda, según el tipo: [nombre, etiqueta, opciones?]. */
 const RECI_CAMPOS = {
   Universidad: [['NombreAlumno', 'Nombre del alumno'], ['Carne', 'Carné'], ['UnidadAcademica', 'Unidad académica']],
@@ -109,11 +115,11 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
     <DocType>${x(f.tipo)}</DocType>
     <IssuedDateTime>${fechaGT(f.fecha)}</IssuedDateTime>
     <Currency>${monedaDe(f)}</Currency>
-    ${f.tipo === 'RDON' ? `<AdditionalIssueDocInfo><Info Name="TipoPersoneria" Value="${x(f.personeria)}"/></AdditionalIssueDocInfo>` : expo ? '<AdditionalIssueDocInfo><Info Name="Exp" Value="SI"/></AdditionalIssueDocInfo>' : ''}
+    ${infoCab(f).length ? `<AdditionalIssueDocInfo>${infoCab(f).map(([n, v]) => `<Info Name="${n}" Value="${x(v)}"/>`).join('')}</AdditionalIssueDocInfo>` : ''}
   </Header>
   <Seller>
     <TaxID>${x(e.nit)}</TaxID>
-    <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="GEN"/></TaxIDAdditionalInfo>
+    <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="${AFILIACION[f.tipo] || 'GEN'}"/></TaxIDAdditionalInfo>
     <Name>${x(e.nombre)}</Name>
     ${e.correo ? `<Contact><EmailList><Email>${x(e.correo)}</Email></EmailList></Contact>` : ''}
     ${fr ? `<AdditionlInfo>${fr.map(([d, t, es]) => `
@@ -157,7 +163,7 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
         <Info Name="RetencionIVA" Value="${r6(totIva)}"/>
         <Info Name="TotalMenosRetenciones" Value="${r6(c.total - Number(r6(totGrav * RET_ISR)) - Number(r6(totIva)))}"/>
       </AditionalInfo>
-    </AdditionalInfo>` : ''}${f.tipo === 'FCAM' ? `
+    </AdditionalInfo>` : ''}${esCambiaria(f.tipo) ? `
     <AdditionalInfo>
       <Code>FCAMB</Code>
       <Type>COMPLEMENTO</Type>
@@ -214,9 +220,9 @@ function generarJSON(f) {
   if (f.cliente.correo) Buyer.Contact = { EmailList: { Email: [f.cliente.correo] } };
   return JSON.stringify({
     Version: '1.00', CountryCode: 'GT',
-    Header: { DocType: f.tipo, IssuedDateTime: fechaGT(f.fecha), Currency: monedaDe(f), ...(f.tipo === 'RDON' ? { AdditionalIssueDocInfo: [{ Name: 'TipoPersoneria', Data: null, Value: f.personeria }] } : expo ? { AdditionalIssueDocInfo: [{ Name: 'Exp', Data: null, Value: 'SI' }] } : {}) },
+    Header: { DocType: f.tipo, IssuedDateTime: fechaGT(f.fecha), Currency: monedaDe(f), ...(infoCab(f).length ? { AdditionalIssueDocInfo: infoCab(f).map(([Name, Value]) => ({ Name, Data: null, Value })) } : {}) },
     Seller: {
-      TaxID: e.nit, TaxIDAdditionalInfo: [{ Name: 'AfiliacionIVA', Data: null, Value: 'GEN' }], Name: e.nombre,
+      TaxID: e.nit, TaxIDAdditionalInfo: [{ Name: 'AfiliacionIVA', Data: null, Value: AFILIACION[f.tipo] || 'GEN' }], Name: e.nombre,
       ...(e.correo ? { Contact: { EmailList: { Email: [e.correo] } } } : {}),
       ...(FRASES[f.tipo] ? { AdditionlInfo: (expo ? [...FRASES[f.tipo], ['2', '4', '1']] : FRASES[f.tipo]).flatMap(([d, tf, esc]) => [{ Name: 'TipoFrase', Data: d, Value: tf }, { Name: 'Escenario', Data: d, Value: esc }]) } : {}),
       BranchInfo: { Code: '1', Name: e.comercial || e.nombre, AddressInfo: dir(e.direccion, e.codigoPostal || '01001', e.municipio || 'Guatemala', e.departamento || 'Guatemala') }
@@ -232,7 +238,7 @@ function generarJSON(f) {
           { Name: 'INCOTERM', Data: '', Value: expo.incoterm }
         ]
       }] : []),
-      ...(f.tipo === 'FCAM' ? [{
+      ...(esCambiaria(f.tipo) ? [{
         Code: 'FCAMB', Type: 'COMPLEMENTO',
         AditionalData: { Data: abonosDe(f).map((a, i) => ({ Info: [
           { Name: 'NumeroAbono', Data: null, Value: String(i + 1) },
@@ -404,7 +410,7 @@ function vistaNueva() {
   const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
   $('xm').onchange = () => totales();
   $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
-  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); totales(); };
+  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = !esCambiaria($('tipo').value); $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); totales(); };
   $('cli').onchange = e => {
     const c = S.clientes[e.target.value];
     $('nit').value = c ? c.nit : 'CF'; $('nom').value = c ? c.nombre : 'Consumidor Final';
@@ -425,7 +431,8 @@ function vistaNueva() {
     const tipo = $('tipo').value, serie = S.emisor.serie || 'FACE-A';
     const k = serie + '|' + tipo;
     const f = { uuid: uuid(), tipo, serie, numero: 0, fecha: new Date().toISOString(), cliente: { nit, nombre, direccion: '' }, items: items.map(i => ({ ...i, descripcion: i.descripcion.trim() })), anulada: false };
-    if (tipo === 'FCAM') {
+    if (NUM_ACCESO.has(tipo)) f.numeroAcceso = numAcceso();
+    if (esCambiaria(tipo)) {
       f.abonos = abonos.map(a => ({ fecha: a.fecha, monto: abonos.length === 1 ? c.total : r2(a.monto) }));
       const hoy = f.fecha.slice(0, 10);
       if (f.abonos.some(a => !a.fecha || a.fecha < hoy)) return toast('Indica una fecha de vencimiento válida en cada abono');
@@ -476,7 +483,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON', 'FPEC', 'FCPC'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
