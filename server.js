@@ -10,7 +10,7 @@
  * Variables de entorno:
  *   DIGIFACT_USUARIO, DIGIFACT_CLAVE, DIGIFACT_NIT   credenciales de pruebas (obligatorias)
  *   DIGIFACT_BASE         base de la API (por defecto https://testnucgt.digifact.com)
- *   DIGIFACT_FORMAT       FORMAT de la consulta (por defecto XML,HTML,PDF)
+ *   DIGIFACT_FORMAT       FORMAT de la consulta (por defecto XML|HTML|PDF; sin confirmar el separador)
  *   DIGIFACT_LOGIN_PATH   ruta para pedir el token (por defecto /api/login/get_token)
  *   DIGIFACT_LOGIN_USER   usuario completo del login (por defecto GT.<NIT de 12 dígitos>.<USUARIO>)
  *   La respuesta del login trae { "token": "..." } (se acepta también Token).
@@ -85,7 +85,7 @@ async function conToken(enviar) {
 
 async function certificar(xml) {
   const { usuario, nit } = credenciales();
-  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit12(nit))}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
+  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit12(nit))}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML|HTML|PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
   const r = await conToken(tk => pedir(url, { method: 'POST', headers: { 'Content-Type': 'application/xml', Authorization: tk }, cuerpo: xml }));
   let j;
   try { j = JSON.parse(r.texto); } catch { throw Object.assign(new Error('Respuesta inesperada de Digifact (HTTP ' + r.status + ')'), { status: 502 }); }
