@@ -1,0 +1,9 @@
+{
+  "name": "facturador-fel",
+  "private": true,
+  "description": "Facturador FEL (SAT Guatemala) con formato Digifact NUC",
+  "scripts": {
+    "test": "node test/validar-xml.js && node test/validar-json.js && node test/servidor.test.js",
+    "start": "node server.js"
+  }
+}

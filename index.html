@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Facturador FEL</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand"><span class="logo">F</span><div><strong>Facturador</strong><small>FEL · SAT Guatemala</small></div></div>
+    <nav id="nav">
+      <a href="#/" data-route="">Resumen</a>
+      <a href="#/nueva" data-route="nueva">Nueva factura</a>
+      <a href="#/facturas" data-route="facturas">Facturas</a>
+      <a href="#/clientes" data-route="clientes">Clientes</a>
+      <a href="#/config" data-route="config">Emisor</a>
+    </nav>
+    <p class="note">Los documentos se guardan en este navegador. La certificación real requiere un certificador autorizado por la SAT.</p>
+  </aside>
+  <main>
+    <header class="topbar">
+      <button class="menu" id="menuBtn" aria-label="Menú">☰</button>
+      <h1 id="title"></h1>
+      <a class="btn primary" href="#/nueva">+ Nueva factura</a>
+    </header>
+    <section id="view"></section>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+<script src="app.js"></script>
+</body>
+</html>
