@@ -109,7 +109,7 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
     <DocType>${x(f.tipo)}</DocType>
     <IssuedDateTime>${fechaGT(f.fecha)}</IssuedDateTime>
     <Currency>${monedaDe(f)}</Currency>
-    ${expo ? '<AdditionalIssueDocInfo><Info Name="Exp" Value="SI"/></AdditionalIssueDocInfo>' : ''}
+    ${f.tipo === 'RDON' ? `<AdditionalIssueDocInfo><Info Name="TipoPersoneria" Value="${x(f.personeria)}"/></AdditionalIssueDocInfo>` : expo ? '<AdditionalIssueDocInfo><Info Name="Exp" Value="SI"/></AdditionalIssueDocInfo>' : ''}
   </Header>
   <Seller>
     <TaxID>${x(e.nit)}</TaxID>
@@ -404,7 +404,7 @@ function vistaNueva() {
   const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
   $('xm').onchange = () => totales();
   $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
-  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = $('tipo').value !== 'RECI'; totales(); };
+  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); totales(); };
   $('cli').onchange = e => {
     const c = S.clientes[e.target.value];
     $('nit').value = c ? c.nit : 'CF'; $('nom').value = c ? c.nombre : 'Consumidor Final';
@@ -435,7 +435,7 @@ function vistaNueva() {
       f.exportacion = { destinatario: $('xd').value.trim(), direccion: $('xr').value.trim(), incoterm: $('xi').value, moneda: $('xm').value };
       if (!esNota(tipo) && (!f.exportacion.destinatario || !f.exportacion.direccion)) return toast('Indica el destinatario y su dirección para la exportación');
     }
-    if (tipo === 'RECI' && $('rt').value) {
+    if ((tipo === 'RECI' || tipo === 'RDON') && $('rt').value) {
       f.recibo = { tipo: $('rt').value, campos: {} };
       $('recf').querySelectorAll('[data-n]').forEach(el => { f.recibo.campos[el.dataset.n] = el.value.trim(); });
       if (f.recibo.tipo !== 'Inmobiliaria' && (!f.recibo.campos.NombreAlumno || !f.recibo.campos.Carne)) return toast('Indica el nombre del alumno y su carné');
@@ -476,7 +476,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
