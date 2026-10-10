@@ -74,10 +74,10 @@ function generarXML(f) {
   const dir = (d, cp, mun, dep) => `<AddressInfo>
         <Address>${x(d)}</Address><City>${x(cp)}</City><District>${x(mun)}</District><State>${x(dep)}</State><Country>GT</Country>
       </AddressInfo>`;
-  let totIva = 0;
+  let totIva = 0, totGrav = 0;
   const items = c.lineas.map(l => {
     const grav = expo || EXENTOS.has(f.tipo) ? l.total : Number(r6(l.total / (1 + IVA))), iva = expo || EXENTOS.has(f.tipo) ? 0 : Number(r6(l.total - grav));
-    totIva += iva;
+    totIva += iva; totGrav += grav;
     return `
     <Item>
       <Type>${l.servicio ? 'Servicio' : 'Bien'}</Type>
@@ -140,6 +140,15 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
         <Info Name="NombreConsignatarioODestinatario" Value="${x(expo.destinatario)}"/>
         <Info Name="DireccionConsignatarioODestinatario" Value="${x(expo.direccion)}"/>
         <Info Name="INCOTERM" Data="" Value="${x(expo.incoterm)}"/>
+      </AditionalInfo>
+    </AdditionalInfo>` : ''}${f.tipo === 'FESP' ? `
+    <AdditionalInfo>
+      <Code>FESP</Code>
+      <Type>COMPLEMENTO</Type>
+      <AditionalInfo>
+        <Info Name="RetencionISR" Value="${r6(totGrav * RET_ISR)}"/>
+        <Info Name="RetencionIVA" Value="${r6(totIva)}"/>
+        <Info Name="TotalMenosRetenciones" Value="${r6(c.total - Number(r6(totGrav * RET_ISR)) - Number(r6(totIva)))}"/>
       </AditionalInfo>
     </AdditionalInfo>` : ''}${f.tipo === 'FCAM' ? `
     <AdditionalInfo>
@@ -442,7 +451,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
