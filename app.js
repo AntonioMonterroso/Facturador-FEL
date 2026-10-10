@@ -673,6 +673,7 @@ function vistaConfig() {
     <div><button class="btn primary">Guardar</button></div>
   </form>
   <div class="card"><h2>Datos</h2><div class="actions" style="margin:0">
+    <button class="btn" id="prb">Probar conexión con Digifact</button>
     <button class="btn" id="exp">Exportar respaldo (JSON)</button>
     <button class="btn danger" id="rst">Borrar todo</button></div></div>`;
   $('fe').onsubmit = ev => {
@@ -684,6 +685,12 @@ function vistaConfig() {
     if ($('ec').value.trim() && !/^[a-zA-ZñÑ0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test($('ec').value.trim())) return toast('El correo del emisor no es válido');
     S.emisor = { nit, nombre: $('eno').value.trim(), comercial: $('eco').value.trim(), direccion: $('ed').value.trim(), codigoPostal: $('ecp').value.trim(), municipio: $('emu').value.trim(), departamento: $('ede').value.trim(), afiliacion: $('eaf').value, escenarioISR: $('eis').value, serie: $('es').value.trim() || 'FACE-A', correo: $('ec').value.trim() };
     guardar(); toast('Emisor guardado');
+  };
+  $('prb').onclick = async () => {
+    try {
+      const j = await (await fetch('/api/estado')).json();
+      toast((j.ok ? 'Conectado: ' : 'Sin conexión: ') + j.mensaje + (j.ok && !j.credencialesListas ? ' · faltan las credenciales (variables DIGIFACT_*)' : '') + ' · ' + j.base);
+    } catch { toast('No se pudo conectar con el servidor. Inicia la app con: node server.js'); }
   };
   $('exp').onclick = () => descargar('respaldo-facturador.json', JSON.stringify(S, null, 2), 'application/json');
   $('rst').onclick = () => { if (confirm('Se borrarán todos los datos de este navegador. ¿Continuar?')) { S = vacio(); guardar(); toast('Datos borrados'); location.hash = '#/'; vistaConfig(); } };

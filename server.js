@@ -3,6 +3,7 @@
  * Servidor local del Facturador FEL (sin dependencias).
  *  - Sirve la app (index.html, styles.css, app.js).
  *  - POST /api/certificar  { xml }  -> envía el NUC-XML a Digifact y devuelve la autorización.
+ *  - GET  /api/estado                      -> comprueba la conexión con Digifact y si hay credenciales configuradas.
  *  - GET  /api/documento?autorizacion=UUID -> descarga el HTML y PDF (base64) de un documento certificado.
  *  - GET  /api/consultar?autorizacion=UUID -> consulta en Digifact un documento ya certificado.
  *  - POST /api/anular      { autorizacion, idReceptor, fechaEmision, motivo } -> anula un documento certificado.
@@ -177,6 +178,18 @@ const servidor = http.createServer(async (req, res) => {
       if (typeof datos.xml !== 'string' || !datos.xml.includes('<Root>')) return responder(res, 400, { ok: false, mensaje: 'Falta el XML del documento' });
       const r = await certificar(datos.xml);
       return responder(res, r.status, r.cuerpo);
+    }
+    if (req.method === 'GET' && ruta === '/api/estado') {
+      // Comprueba que Digifact responde (GET <base>/api/ devuelve un mensaje con la versión) y si hay credenciales configuradas.
+      const credencialesListas = ['DIGIFACT_USUARIO', 'DIGIFACT_CLAVE', 'DIGIFACT_NIT'].every(k => ENV[k]);
+      try {
+        const r = await pedir(BASE + '/api/');
+        let j = {};
+        try { j = JSON.parse(r.texto); } catch { /* no es JSON */ }
+        return responder(res, 200, { ok: r.status === 200 && !!j.Message, mensaje: j.Message || ('HTTP ' + r.status), base: BASE, credencialesListas });
+      } catch (e) {
+        return responder(res, 200, { ok: false, mensaje: 'No se pudo contactar a Digifact: ' + e.message, base: BASE, credencialesListas });
+      }
     }
     if (req.method === 'GET' && ruta === '/api/documento') {
       if (req.headers['x-requested-with'] !== 'facturador') return responder(res, 400, { ok: false, mensaje: 'Petición no permitida' });

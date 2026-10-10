@@ -23,6 +23,7 @@ const falso = http.createServer((req, res) => {
       if (modo === 'error') return res.end(JSON.stringify({ code: 5001, message: 'Error en contenido del XML', description: 'NIT inválido' }));
       return res.end(JSON.stringify({ code: 1, authNumber: 'AAAA-BBBB', batch: 'AAAA', serial: '123', issuedTimeStamp: '2026-01-01T10:00:00', enrolledTimeStamp: '2026-01-01T10:00:05', responseData1: 'eG1s', responseData3: 'cGRm' }));
     }
+    if (url.pathname === '/api/' && req.method === 'GET') return res.end(JSON.stringify({ Message: 'Api NUC V2.2.31 is running!', Author: 'Digifact Servicios S.A.' }));
     if (url.pathname === '/api/GetDocument') {
       llamadas.doc.push({ query: Object.fromEntries(url.searchParams), auth: req.headers.authorization, metodo: req.method });
       if (req.headers.authorization !== tokenActual) { res.statusCode = 401; return res.end('{}'); }
@@ -126,6 +127,9 @@ falso.listen(0, '127.0.0.1', async () => {
       assert.strictEqual(r.status, 422); assert.strictEqual(r.json.ok, false); assert.strictEqual(r.json.mensaje, 'No encontrado');
       assert.strictEqual((await getC(p, '?autorizacion=x', H)).status, 400);
       assert.strictEqual((await getC(p, '?autorizacion=BDE0DEC2-5ABE-468E-A6F1-0AB3637F2764', {})).status, 400);
+      // 8) Estado de la conexión
+      const est = await new Promise((ok, ko) => http.get({ port: p, path: '/api/estado' }, res => { const c = []; res.on('data', x => c.push(x)); res.on('end', () => ok(JSON.parse(Buffer.concat(c).toString()))); }).on('error', ko));
+      assert.deepStrictEqual([est.ok, est.mensaje, est.credencialesListas], [true, 'Api NUC V2.2.31 is running!', true]);
       // 7) Descarga del documento (HTML y PDF en base64)
       r = await getD(p, '?autorizacion=4D19A6D5-05B6-4D96-9EA4-7D75620B48CE', H);
       assert.strictEqual(r.status, 200); assert.deepStrictEqual([r.json.ok, r.json.html, r.json.pdf], [true, 'PCFET0NU', 'JVBERi0x']);
