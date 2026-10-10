@@ -102,7 +102,7 @@ function generarXML(f) {
     <TaxID>${x(e.nit)}</TaxID>
     <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="GEN"/></TaxIDAdditionalInfo>
     <Name>${x(e.nombre)}</Name>
-    <Contact><EmailList><Email>${x(e.correo)}</Email></EmailList></Contact>
+    ${e.correo ? `<Contact><EmailList><Email>${x(e.correo)}</Email></EmailList></Contact>` : ''}
     <AdditionlInfo>
       <Info Name="TipoFrase" Data="1" Value="1"/>
       <Info Name="Escenario" Data="1" Value="1"/>
