@@ -16,7 +16,7 @@ const esCambiaria = t => t === 'FCAM' || t === 'FCPC' || t === 'FCRP';
 const NUM_ACCESO = new Set(['FPEC', 'FCPC', 'FARP', 'FCRP']);
 const numAcceso = () => String(100000000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000000);
 /** Datos de cabecera adicionales: [nombre, valor]. */
-const infoCab = f => [...(f.tipo === 'RDON' ? [['TipoPersoneria', f.personeria]] : []), ...(f.exportacion ? [['Exp', 'SI']] : []), ...(f.numeroAcceso ? [['NumeroAcceso', f.numeroAcceso]] : [])];
+const infoCab = f => [...(f.tipo === 'RDON' ? [['TipoPersoneria', f.personeria]] : []), ...(f.exportacion ? [['Exp', 'SI']] : []), ...(f.numeroAcceso ? [['NumeroAcceso', f.numeroAcceso]] : []), ...(f.espect ? [['Espectaculo', 'SI']] : [])];
 /** Datos opcionales del recibo que viajan en la adenda, según el tipo: [nombre, etiqueta, opciones?]. */
 const RECI_CAMPOS = {
   Universidad: [['NombreAlumno', 'Nombre del alumno'], ['Carne', 'Carné'], ['UnidadAcademica', 'Unidad académica']],
@@ -31,6 +31,11 @@ const ADENDA_PLANTILLAS = {
   'Donación a partidos políticos': ['Descripcion Aporte', 'Banco', 'Nombre Beneficiario', 'Valor Estimado', 'DPI', 'Telefono', 'Afiliado', 'Dinerario', 'En especie', 'Simpatizante', 'Efectivo', 'Cheque'],
   'Comercio / envío': ['Vendedor', 'Numero de Compra', 'Direccion de Envio', 'Fecha Envio', 'Forma de Envio', 'Condiciones']
 };
+/** Complemento ESPECT (espectáculos) y CCA (cobro por cuenta ajena). */
+const ESPECT_CAMPOS = [['CodigoEvento', 'Código del evento'], ['NombreEvento', 'Nombre del evento'], ['NombreLocalidad', 'Localidad'], ['PrecioAdmision', 'Precio de admisión'], ['NumeroBoleto', 'Número de boleto']];
+const CCA_CAMPOS = [['NITtercero', 'NIT del tercero'], ['NumeroDocumento', 'No. de documento'], ['FechaDocumento', 'Fecha del documento', 'date'], ['Descripcion', 'Descripción'], ['BaseImponible', 'Base imponible', 'number'], ['MontoCobroDAI', 'Cobro DAI', 'number'], ['MontoCobroIVA', 'Cobro IVA', 'number'], ['MontoCobroOtros', 'Cobro otros', 'number']];
+const infoCCA = f => (f.cca || []).map(c => [...CCA_CAMPOS.map(([n]) => [n, c[n]]), ['MontoCobroTotal', c.MontoCobroTotal]]);
+const infoEspect = f => f.espect ? ESPECT_CAMPOS.map(([n]) => [n, f.espect[n]]).filter(([, v]) => v) : [];
 const infoAdenda = f => (f.adenda || []).filter(([, v]) => v);
 const infoRecibo = f => f.recibo ? [['Tipo', f.recibo.tipo], ...RECI_CAMPOS[f.recibo.tipo].map(([n]) => [n, f.recibo.campos[n]])].filter(([, v]) => v) : [];
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
@@ -194,6 +199,22 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
         <Info Name="SerieDocumentoOrigen" Value="${x(f.origen.autorizacion.slice(0, 8))}"/>
         <Info Name="NumeroDocumentoOrigen" Value="${x(f.origen.numero)}"/>
       </AditionalInfo>
+    </AdditionalInfo>` : ''}${infoEspect(f).length ? `
+    <AdditionalInfo>
+      <Code>ESPECT</Code>
+      <Type>COMPLEMENTO</Type>
+      <AditionalInfo>${infoEspect(f).map(([n, v]) => `
+        <Info Name="${n}" Data="" Value="${x(v)}"/>`).join('')}
+      </AditionalInfo>
+    </AdditionalInfo>` : ''}${infoCCA(f).length ? `
+    <AdditionalInfo>
+      <Code>CCA</Code>
+      <Type>COMPLEMENTO</Type>
+      <AditionalData>${infoCCA(f).map(d => `
+        <Data>${d.map(([n, v]) => `
+          <Info Name="${n}" Value="${x(v)}"/>`).join('')}
+        </Data>`).join('')}
+      </AditionalData>
     </AdditionalInfo>` : ''}
     <AdditionalInfo>
       <Code>${x(f.uuid)}</Code>
@@ -276,6 +297,8 @@ function generarJSON(f) {
           { Name: 'NumeroDocumentoOrigen', Data: null, Value: f.origen.numero }
         ]
       }] : []),
+      ...(infoEspect(f).length ? [{ Code: 'ESPECT', Type: 'COMPLEMENTO', AditionalInfo: infoEspect(f).map(([Name, Value]) => ({ Name, Data: '', Value })) }] : []),
+      ...(infoCCA(f).length ? [{ Code: 'CCA', Type: 'COMPLEMENTO', AditionalData: { Data: infoCCA(f).map(d => ({ Info: d.map(([Name, Value]) => ({ Name, Data: null, Value })) })) } }] : []),
       { Code: f.uuid, Type: 'ADENDA', ...(infoAdenda(f).length ? { AditionalData: { Data: [{ Info: infoAdenda(f).map(([Name, Value]) => ({ Name, Data: null, Value })), Name: 'INFORMACION_ADICIONAL' }] } } : {}), AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }, ...infoRecibo(f).map(([Name, Value]) => ({ Name, Data: null, Value }))] }
     ] }
   }, null, 2);
@@ -356,6 +379,9 @@ function vistaNueva() {
         <select id="rt"><option value="">Ninguno</option>${Object.keys(RECI_CAMPOS).map(t => `<option>${t}</option>`).join('')}</select>
         <div id="recf" class="grid two" style="margin-top:8px"></div>
       </div>
+      <div id="es" style="grid-column:1/-1"><label><input type="checkbox" id="xe" style="width:auto"> Espectáculo</label>
+        <div id="xef" class="grid two" hidden style="margin-top:8px">${ESPECT_CAMPOS.map(([n, l], i) => `<div><label for="es${i}">${l}</label><input id="es${i}" data-n="${n}"></div>`).join('')}</div></div>
+      <div id="cc" style="grid-column:1/-1"><label>Cobro por cuenta ajena</label><div id="ccl"></div><button type="button" class="btn sm" id="ccAdd">+ Cobro por cuenta ajena</button></div>
       <div id="ad" style="grid-column:1/-1">
         <label for="at">Información adicional (adenda)</label>
         <select id="at"><option value="">Ninguna</option>${Object.keys(ADENDA_PLANTILLAS).map(t => `<option>${t}</option>`).join('')}</select>
@@ -424,6 +450,16 @@ function vistaNueva() {
       ? `<select id="rf${i}" data-n="${n}">${op.map(o => `<option>${o}</option>`).join('')}</select>`
       : `<input id="rf${i}" data-n="${n}">`}</div>`).join('');
   };
+  $('xe').onchange = () => { $('xef').hidden = !$('xe').checked; };
+  const cobros = [];
+  const pintarCobros = () => {
+    $('ccl').innerHTML = cobros.map((c, i) => `<div class="grid two" data-c="${i}" style="margin-bottom:10px;padding:10px;border:1px solid var(--line);border-radius:10px">
+      ${CCA_CAMPOS.map(([n, l, t]) => `<div><label>${l}</label><input data-f="${n}" type="${t || 'text'}" ${t === 'number' ? 'min="0" step="0.01"' : ''} value="${esc(c[n] || '')}"></div>`).join('')}
+      <div><button type="button" class="btn sm danger" data-q>Quitar</button></div></div>`).join('');
+  };
+  $('ccl').addEventListener('input', e => { const d = e.target.closest('[data-c]'); if (d && e.target.dataset.f) cobros[d.dataset.c][e.target.dataset.f] = e.target.value; });
+  $('ccl').addEventListener('click', e => { if (e.target.closest('[data-q]')) { cobros.splice(e.target.closest('[data-c]').dataset.c, 1); pintarCobros(); } });
+  $('ccAdd').onclick = () => { cobros.push({}); pintarCobros(); };
   $('at').onchange = () => {
     $('adf').innerHTML = (ADENDA_PLANTILLAS[$('at').value] || []).map((n, i) => `<div><label for="ad${i}">${n}</label><input id="ad${i}" data-n="${n}"></div>`).join('');
   };
@@ -451,6 +487,16 @@ function vistaNueva() {
     const tipo = $('tipo').value, serie = S.emisor.serie || 'FACE-A';
     const k = serie + '|' + tipo;
     const f = { uuid: uuid(), tipo, serie, numero: 0, fecha: new Date().toISOString(), cliente: { nit, nombre, direccion: '' }, items: items.map(i => ({ ...i, descripcion: i.descripcion.trim() })), anulada: false };
+    if ($('xe').checked) {
+      f.espect = {};
+      $('xef').querySelectorAll('[data-n]').forEach(el => { f.espect[el.dataset.n] = el.value.trim(); });
+      if (!f.espect.NombreEvento) return toast('Indica el nombre del evento');
+    }
+    if (cobros.length) {
+      const n2 = v => (parseFloat(v) || 0).toFixed(2);
+      f.cca = cobros.map(c => ({ ...c, BaseImponible: n2(c.BaseImponible), MontoCobroDAI: n2(c.MontoCobroDAI), MontoCobroIVA: n2(c.MontoCobroIVA), MontoCobroOtros: n2(c.MontoCobroOtros), MontoCobroTotal: n2((+c.MontoCobroDAI || 0) + (+c.MontoCobroIVA || 0) + (+c.MontoCobroOtros || 0)) }));
+      if (f.cca.some(c => !validarNIT(normNIT(c.NITtercero)) || !c.NumeroDocumento || !c.FechaDocumento)) return toast('Completa NIT, número y fecha de cada cobro por cuenta ajena');
+    }
     if ($('at').value) f.adenda = [...$('adf').querySelectorAll('[data-n]')].map(el => [el.dataset.n, el.value.trim()]);
     if (NUM_ACCESO.has(tipo)) f.numeroAcceso = numAcceso();
     if (esCambiaria(tipo)) {
