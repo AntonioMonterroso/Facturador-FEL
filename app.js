@@ -40,7 +40,7 @@ function calcular(items) {
 /* ---------- Estado ---------- */
 const KEY = 'facturador-fel-v1';
 const vacio = () => ({
-  emisor: { nit: '', nombre: '', comercial: '', direccion: '', serie: 'FACE-A', correo: '' },
+  emisor: { nit: '', nombre: '', comercial: '', direccion: '', codigoPostal: '01001', municipio: 'Guatemala', departamento: 'Guatemala', serie: 'FACE-A', correo: '' },
   clientes: [], facturas: [], correlativo: {}
 });
 let S = vacio();
@@ -53,48 +53,79 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 2400);
 }
 
-/* ---------- XML DTE (borrador sin certificar) ---------- */
+/* ---------- XML Digifact (formato "Root", NUC Guatemala) ---------- */
+const r6 = n => (Math.round((n + Number.EPSILON) * 1e6) / 1e6).toFixed(6);
+/** Fecha en hora de Guatemala (UTC-6, sin horario de verano), p. ej. 2022-07-01T11:28:00-06:00 */
+const fechaGT = iso => new Date(new Date(iso).getTime() - 6 * 3600e3).toISOString().slice(0, 19) + '-06:00';
+
 function generarXML(f) {
-  const e = S.emisor, c = calcular(f.items);
-  const x = esc;
-  const items = c.lineas.map((l, i) => `
-      <dte:Item NumeroLinea="${i + 1}" BienOServicio="${l.servicio ? 'S' : 'B'}">
-        <dte:Cantidad>${l.cantidad}</dte:Cantidad>
-        <dte:UnidadMedida>UND</dte:UnidadMedida>
-        <dte:Descripcion>${x(l.descripcion)}</dte:Descripcion>
-        <dte:PrecioUnitario>${l.precio.toFixed(2)}</dte:PrecioUnitario>
-        <dte:Precio>${l.bruto.toFixed(2)}</dte:Precio>
-        <dte:Descuento>${l.desc.toFixed(2)}</dte:Descuento>
-        <dte:Impuestos><dte:Impuesto>
-          <dte:NombreCorto>IVA</dte:NombreCorto><dte:CodigoUnidadGravable>1</dte:CodigoUnidadGravable>
-          <dte:MontoGravable>${l.gravable.toFixed(2)}</dte:MontoGravable><dte:MontoImpuesto>${l.iva.toFixed(2)}</dte:MontoImpuesto>
-        </dte:Impuesto></dte:Impuestos>
-        <dte:Total>${l.total.toFixed(2)}</dte:Total>
-      </dte:Item>`).join('');
+  const e = S.emisor, x = esc, c = calcular(f.items);
+  const dir = (d, cp, mun, dep) => `<AddressInfo>
+        <Address>${x(d)}</Address><City>${x(cp)}</City><District>${x(mun)}</District><State>${x(dep)}</State><Country>GT</Country>
+      </AddressInfo>`;
+  let totIva = 0;
+  const items = c.lineas.map(l => {
+    const grav = Number(r6(l.total / (1 + IVA))), iva = Number(r6(l.total - grav));
+    totIva += iva;
+    return `
+    <Item>
+      <Type>${l.servicio ? 'Servicio' : 'Bien'}</Type>
+      <Description>${x(l.descripcion)}</Description>
+      <Qty>${r6(l.cantidad)}</Qty>
+      <UnitOfMeasure>UNI</UnitOfMeasure>
+      <Price>${r6(l.precio)}</Price>
+      <Discounts><Discount><Amount>${l.desc.toFixed(2)}</Amount></Discount></Discounts>
+      <Taxes><Tax>
+        <Code>1</Code><Description>IVA</Description>
+        <TaxableAmount>${r6(grav)}</TaxableAmount><Amount>${r6(iva)}</Amount>
+      </Tax></Taxes>
+      <Totals><TotalItem>${r6(l.total)}</TotalItem></Totals>
+    </Item>`;
+  }).join('');
   return `<?xml version="1.0" encoding="UTF-8"?>
-<!-- BORRADOR sin firma ni certificación. Debe enviarse a un certificador FEL autorizado por la SAT. -->
-<dte:GTDocumento xmlns:dte="http://www.sat.gob.gt/dte/fel/0.2.0" Version="0.1">
-  <dte:SAT ClaseDocumento="dte">
-    <dte:DTE ID="DatosCertificados">
-      <dte:DatosEmision ID="DatosEmision">
-        <dte:DatosGenerales Tipo="${x(f.tipo)}" FechaHoraEmision="${x(f.fecha)}" CodigoMoneda="GTQ"/>
-        <dte:Emisor NITEmisor="${x(e.nit)}" NombreEmisor="${x(e.nombre)}" CodigoEstablecimiento="1" NombreComercial="${x(e.comercial || e.nombre)}" AfiliacionIVA="GEN">
-          <dte:DireccionEmisor><dte:Direccion>${x(e.direccion)}</dte:Direccion><dte:Pais>GT</dte:Pais></dte:DireccionEmisor>
-        </dte:Emisor>
-        <dte:Receptor IDReceptor="${x(f.cliente.nit)}" NombreReceptor="${x(f.cliente.nombre)}">
-          <dte:DireccionReceptor><dte:Direccion>${x(f.cliente.direccion || 'Ciudad')}</dte:Direccion><dte:Pais>GT</dte:Pais></dte:DireccionReceptor>
-        </dte:Receptor>
-        <dte:Frases><dte:Frase TipoFrase="1" CodigoEscenario="1"/></dte:Frases>
-        <dte:Items>${items}
-        </dte:Items>
-        <dte:Totales>
-          <dte:TotalImpuestos><dte:TotalImpuesto NombreCorto="IVA" TotalMontoImpuesto="${c.iva.toFixed(2)}"/></dte:TotalImpuestos>
-          <dte:GranTotal>${c.total.toFixed(2)}</dte:GranTotal>
-        </dte:Totales>
-      </dte:DatosEmision>
-    </dte:DTE>
-  </dte:SAT>
-</dte:GTDocumento>
+<Root>
+  <Version>1.00</Version>
+  <CountryCode>GT</CountryCode>
+  <Header>
+    <DocType>${x(f.tipo)}</DocType>
+    <IssuedDateTime>${fechaGT(f.fecha)}</IssuedDateTime>
+    <Currency>GTQ</Currency>
+  </Header>
+  <Seller>
+    <TaxID>${x(e.nit)}</TaxID>
+    <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="GEN"/></TaxIDAdditionalInfo>
+    <Name>${x(e.nombre)}</Name>
+    <Contact><EmailList><Email>${x(e.correo)}</Email></EmailList></Contact>
+    <AdditionlInfo>
+      <Info Name="TipoFrase" Data="1" Value="1"/>
+      <Info Name="Escenario" Data="1" Value="1"/>
+    </AdditionlInfo>
+    <BranchInfo>
+      <Code>1</Code>
+      <Name>${x(e.comercial || e.nombre)}</Name>
+      ${dir(e.direccion, e.codigoPostal || '01001', e.municipio || 'Guatemala', e.departamento || 'Guatemala')}
+    </BranchInfo>
+  </Seller>
+  <Buyer>
+    <TaxID>${x(f.cliente.nit)}</TaxID>
+    <Name>${x(f.cliente.nombre)}</Name>
+    ${f.cliente.correo ? `<Contact><EmailList><Email>${x(f.cliente.correo)}</Email></EmailList></Contact>` : ''}
+    ${dir(f.cliente.direccion || 'Ciudad', '01001', 'Guatemala', 'Guatemala')}
+  </Buyer>
+  <Items>${items}
+  </Items>
+  <Totals>
+    <TotalTaxes><TotalTax><Description>IVA</Description><Amount>${r6(totIva)}</Amount></TotalTax></TotalTaxes>
+    <GrandTotal><InvoiceTotal>${r6(c.total)}</InvoiceTotal></GrandTotal>
+  </Totals>
+  <AdditionalDocumentInfo>
+    <AdditionalInfo>
+      <Code>${x(f.uuid)}</Code>
+      <Type>ADENDA</Type>
+      <AditionalInfo><Info Name="VALIDAR_REFERENCIA_INTERNA" Value="NO_VALIDAR"/></AditionalInfo>
+    </AdditionalInfo>
+  </AdditionalDocumentInfo>
+</Root>
 `;
 }
 
@@ -243,7 +274,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    <button class="btn" id="xml">Descargar XML (borrador)</button>
+    <button class="btn" id="xml">Descargar XML (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
   </div>`;
@@ -282,6 +313,9 @@ function vistaConfig() {
     <div><label for="eno">Razón social</label><input id="eno" value="${esc(e.nombre)}"></div>
     <div><label for="eco">Nombre comercial</label><input id="eco" value="${esc(e.comercial)}"></div>
     <div><label for="ed">Dirección fiscal</label><input id="ed" value="${esc(e.direccion)}"></div>
+    <div><label for="ecp">Código postal</label><input id="ecp" value="${esc(e.codigoPostal)}"></div>
+    <div><label for="emu">Municipio</label><input id="emu" value="${esc(e.municipio)}"></div>
+    <div><label for="ede">Departamento</label><input id="ede" value="${esc(e.departamento)}"></div>
     <div><label for="es">Serie</label><input id="es" value="${esc(e.serie)}"></div>
     <div><label for="ec">Correo</label><input id="ec" type="email" value="${esc(e.correo)}"></div>
     <div><button class="btn primary">Guardar</button></div>
@@ -294,7 +328,7 @@ function vistaConfig() {
     const nit = normNIT($('en').value);
     if (nit === 'CF' || !validarNIT(nit)) { $('enErr').textContent = 'NIT inválido'; return; }
     if (!$('eno').value.trim()) return toast('Falta la razón social');
-    S.emisor = { nit, nombre: $('eno').value.trim(), comercial: $('eco').value.trim(), direccion: $('ed').value.trim(), serie: $('es').value.trim() || 'FACE-A', correo: $('ec').value.trim() };
+    S.emisor = { nit, nombre: $('eno').value.trim(), comercial: $('eco').value.trim(), direccion: $('ed').value.trim(), codigoPostal: $('ecp').value.trim(), municipio: $('emu').value.trim(), departamento: $('ede').value.trim(), serie: $('es').value.trim() || 'FACE-A', correo: $('ec').value.trim() };
     guardar(); toast('Emisor guardado');
   };
   $('exp').onclick = () => descargar('respaldo-facturador.json', JSON.stringify(S, null, 2), 'application/json');
@@ -314,4 +348,4 @@ $('menuBtn').onclick = () => $('sidebar').classList.toggle('open');
 window.addEventListener('hashchange', ruta);
 ruta();
 
-if (typeof module !== 'undefined') module.exports = { validarNIT, calcular };
+if (typeof module !== 'undefined') module.exports = { validarNIT, calcular, generarXML };
