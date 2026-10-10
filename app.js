@@ -23,9 +23,15 @@ const RECI_CAMPOS = {
   Colegio: [['NombreAlumno', 'Nombre del alumno'], ['Carne', 'Carné'], ['Grado', 'Grado'], ['Seccion', 'Sección'], ['Jornada', 'Jornada'], ['TipoDePago', 'Tipo de pago'], ['NoReferencia', 'No. de referencia'], ['Banco', 'Banco'], ['Total', 'Total pagado'], ['Observaciones', 'Observaciones']],
   Inmobiliaria: [['MZ', 'Manzana (MZ)'], ['APTO', 'Apartamento / lote'], ['TipoPago', 'Tipo de pago', ['Abono', 'Cancelado']]]
 };
-/** Facturas con armas y municiones: datos adicionales en la adenda. */
-const ARMAS = [['Tenencia', 'Tenencia'], ['Licencia', 'Licencia'], ['Autorizacion', 'Autorización'], ['DIGECAM', 'DIGECAM'], ['Otros', 'Otros']];
-const infoArmas = f => f.armas ? ARMAS.map(([n]) => [n, f.armas[n]]).filter(([, v]) => v) : [];
+/** Información adicional en la adenda (INFORMACION_ADICIONAL): plantillas de campos por giro. */
+const ADENDA_PLANTILLAS = {
+  'Armas y municiones': ['Tenencia', 'Licencia', 'Autorizacion', 'DIGECAM', 'Otros'],
+  'Carga aérea': ['Codigo Destinatario', 'Nombre Comprador', 'Direccion Comprador', 'Codigo Comprador', 'Otra Referencia', 'Nombre Exportador', 'Codigo Exportador', 'No. Guia Aerea', 'Tipo De Cambio'],
+  'Exportación (embarque)': ['POR CUENTA', 'NOTIFICAR', 'PUERTO EMBARQUE', 'DESTINO FINAL', 'TRANSPORTISTA', 'FECHA SALIDA', 'DATOS CARTA'],
+  'Donación a partidos políticos': ['Descripcion Aporte', 'Banco', 'Nombre Beneficiario', 'Valor Estimado', 'DPI', 'Telefono', 'Afiliado', 'Dinerario', 'En especie', 'Simpatizante', 'Efectivo', 'Cheque'],
+  'Comercio / envío': ['Vendedor', 'Numero de Compra', 'Direccion de Envio', 'Fecha Envio', 'Forma de Envio', 'Condiciones']
+};
+const infoAdenda = f => (f.adenda || []).filter(([, v]) => v);
 const infoRecibo = f => f.recibo ? [['Tipo', f.recibo.tipo], ...RECI_CAMPOS[f.recibo.tipo].map(([n]) => [n, f.recibo.campos[n]])].filter(([, v]) => v) : [];
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
 const esNota = t => t === 'NCRE' || t === 'NDEB';
@@ -191,8 +197,8 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
     </AdditionalInfo>` : ''}
     <AdditionalInfo>
       <Code>${x(f.uuid)}</Code>
-      <Type>ADENDA</Type>${infoArmas(f).length ? `
-      <AditionalData><Data Name="INFORMACION_ADICIONAL">${infoArmas(f).map(([n, v]) => `
+      <Type>ADENDA</Type>${infoAdenda(f).length ? `
+      <AditionalData><Data Name="INFORMACION_ADICIONAL">${infoAdenda(f).map(([n, v]) => `
         <Info Name="${n}" Value="${x(v)}"/>`).join('')}
       </Data></AditionalData>` : ''}
       <AditionalInfo>
@@ -270,7 +276,7 @@ function generarJSON(f) {
           { Name: 'NumeroDocumentoOrigen', Data: null, Value: f.origen.numero }
         ]
       }] : []),
-      { Code: f.uuid, Type: 'ADENDA', ...(infoArmas(f).length ? { AditionalData: { Data: [{ Info: infoArmas(f).map(([Name, Value]) => ({ Name, Data: null, Value })), Name: 'INFORMACION_ADICIONAL' }] } } : {}), AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }, ...infoRecibo(f).map(([Name, Value]) => ({ Name, Data: null, Value }))] }
+      { Code: f.uuid, Type: 'ADENDA', ...(infoAdenda(f).length ? { AditionalData: { Data: [{ Info: infoAdenda(f).map(([Name, Value]) => ({ Name, Data: null, Value })), Name: 'INFORMACION_ADICIONAL' }] } } : {}), AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }, ...infoRecibo(f).map(([Name, Value]) => ({ Name, Data: null, Value }))] }
     ] }
   }, null, 2);
 }
@@ -350,8 +356,11 @@ function vistaNueva() {
         <select id="rt"><option value="">Ninguno</option>${Object.keys(RECI_CAMPOS).map(t => `<option>${t}</option>`).join('')}</select>
         <div id="recf" class="grid two" style="margin-top:8px"></div>
       </div>
-      <div id="arm" style="grid-column:1/-1"><label><input type="checkbox" id="xa" style="width:auto"> Armas y municiones</label>
-        <div id="xaf" class="grid two" hidden style="margin-top:8px">${ARMAS.map(([n, l], i) => `<div><label for="ar${i}">${l}</label><input id="ar${i}" data-n="${n}"></div>`).join('')}</div></div>
+      <div id="ad" style="grid-column:1/-1">
+        <label for="at">Información adicional (adenda)</label>
+        <select id="at"><option value="">Ninguna</option>${Object.keys(ADENDA_PLANTILLAS).map(t => `<option>${t}</option>`).join('')}</select>
+        <div id="adf" class="grid two" style="margin-top:8px"></div>
+      </div>
       <div id="pers" hidden><label for="pf">Tipo de personería (RDON)</label><input id="pf" value="734" inputmode="numeric"></div>
       <div id="venc" hidden style="grid-column:1/-1"><label>Abonos (factura cambiaria)</label><div id="abs"></div><button type="button" class="btn sm" id="abAdd">+ Abono</button><div class="hint">Con un solo abono se cobra el total; con varios, la suma debe igualar el total.</div></div>
       <div id="orig" class="grid two" hidden style="grid-column:1/-1">
@@ -415,11 +424,13 @@ function vistaNueva() {
       ? `<select id="rf${i}" data-n="${n}">${op.map(o => `<option>${o}</option>`).join('')}</select>`
       : `<input id="rf${i}" data-n="${n}">`}</div>`).join('');
   };
-  $('xa').onchange = () => { $('xaf').hidden = !$('xa').checked; };
+  $('at').onchange = () => {
+    $('adf').innerHTML = (ADENDA_PLANTILLAS[$('at').value] || []).map((n, i) => `<div><label for="ad${i}">${n}</label><input id="ad${i}" data-n="${n}"></div>`).join('');
+  };
   const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
   $('xm').onchange = () => totales();
   $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
-  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = !esCambiaria($('tipo').value); $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); $('arm').hidden = $('tipo').value !== 'FACT'; totales(); };
+  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = !esCambiaria($('tipo').value); $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); totales(); };
   $('cli').onchange = e => {
     const c = S.clientes[e.target.value];
     $('nit').value = c ? c.nit : 'CF'; $('nom').value = c ? c.nombre : 'Consumidor Final';
@@ -440,10 +451,7 @@ function vistaNueva() {
     const tipo = $('tipo').value, serie = S.emisor.serie || 'FACE-A';
     const k = serie + '|' + tipo;
     const f = { uuid: uuid(), tipo, serie, numero: 0, fecha: new Date().toISOString(), cliente: { nit, nombre, direccion: '' }, items: items.map(i => ({ ...i, descripcion: i.descripcion.trim() })), anulada: false };
-    if (tipo === 'FACT' && $('xa').checked) {
-      f.armas = {};
-      $('xaf').querySelectorAll('[data-n]').forEach(el => { f.armas[el.dataset.n] = el.value.trim(); });
-    }
+    if ($('at').value) f.adenda = [...$('adf').querySelectorAll('[data-n]')].map(el => [el.dataset.n, el.value.trim()]);
     if (NUM_ACCESO.has(tipo)) f.numeroAcceso = numAcceso();
     if (esCambiaria(tipo)) {
       f.abonos = abonos.map(a => ({ fecha: a.fecha, monto: abonos.length === 1 ? c.total : r2(a.monto) }));
