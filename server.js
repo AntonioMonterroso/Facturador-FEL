@@ -10,7 +10,8 @@
  *
  * Variables de entorno:
  *   DIGIFACT_USUARIO, DIGIFACT_CLAVE, DIGIFACT_NIT   credenciales de pruebas (obligatorias)
- *   DIGIFACT_BASE         base de la API (por defecto https://testnucgt.digifact.com)
+ *   DIGIFACT_BASE         base de la API (por defecto https://testnucgt.digifact.com, que es PRUEBAS)
+ *                         Producción: https://nucgt.digifact.com/gt.com.apinuc
  *   DIGIFACT_FORMAT       FORMAT de la consulta (por defecto XML|HTML|PDF; sin confirmar el separador)
  *   DIGIFACT_LOGIN_PATH   ruta para pedir el token (por defecto /api/login/get_token)
  *   DIGIFACT_LOGIN_USER   usuario completo del login (por defecto GT.<NIT de 12 dígitos>.<USUARIO>)
