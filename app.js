@@ -11,8 +11,13 @@ const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
 const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']] };
-/** Datos opcionales del recibo (universidad, colegio, inmobiliaria) que viajan en la adenda. */
-const infoRecibo = f => f.recibo ? [['Tipo', f.recibo.tipo], ['NombreAlumno', f.recibo.alumno], ['Carne', f.recibo.carne], ['UnidadAcademica', f.recibo.unidad]].filter(([, v]) => v) : [];
+/** Datos opcionales del recibo que viajan en la adenda, según el tipo: [nombre, etiqueta, opciones?]. */
+const RECI_CAMPOS = {
+  Universidad: [['NombreAlumno', 'Nombre del alumno'], ['Carne', 'Carné'], ['UnidadAcademica', 'Unidad académica']],
+  Colegio: [['NombreAlumno', 'Nombre del alumno'], ['Carne', 'Carné'], ['Grado', 'Grado'], ['Seccion', 'Sección'], ['Jornada', 'Jornada'], ['TipoDePago', 'Tipo de pago'], ['NoReferencia', 'No. de referencia'], ['Banco', 'Banco'], ['Total', 'Total pagado'], ['Observaciones', 'Observaciones']],
+  Inmobiliaria: [['MZ', 'Manzana (MZ)'], ['APTO', 'Apartamento / lote'], ['TipoPago', 'Tipo de pago', ['Abono', 'Cancelado']]]
+};
+const infoRecibo = f => f.recibo ? [['Tipo', f.recibo.tipo], ...RECI_CAMPOS[f.recibo.tipo].map(([n]) => [n, f.recibo.campos[n]])].filter(([, v]) => v) : [];
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
 const esNota = t => t === 'NCRE' || t === 'NDEB';
 const money = (n, mon = 'GTQ') => (mon === 'USD' ? 'US$ ' : 'Q ') + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -328,11 +333,10 @@ function vistaNueva() {
           <div><label for="xi">INCOTERM</label><select id="xi">${INCOTERMS.map(i => `<option>${i}</option>`).join('')}</select></div>
           <div><label for="xm">Moneda</label><select id="xm"><option value="USD">USD</option><option value="GTQ">GTQ</option></select></div>
         </div></div>
-      <div id="rec" class="grid two" hidden style="grid-column:1/-1">
-        <div><label for="rt">Tipo de recibo</label><select id="rt"><option value="">Ninguno</option><option>Universidad</option><option>Colegio</option><option>Inmobiliaria</option></select></div>
-        <div><label for="ra">Nombre del alumno</label><input id="ra"></div>
-        <div><label for="rc">Carné</label><input id="rc"></div>
-        <div><label for="ru">Unidad académica</label><input id="ru"></div>
+      <div id="rec" hidden style="grid-column:1/-1">
+        <label for="rt">Tipo de recibo</label>
+        <select id="rt"><option value="">Ninguno</option>${Object.keys(RECI_CAMPOS).map(t => `<option>${t}</option>`).join('')}</select>
+        <div id="recf" class="grid two" style="margin-top:8px"></div>
       </div>
       <div id="pers" hidden><label for="pf">Tipo de personería (RDON)</label><input id="pf" value="734" inputmode="numeric"></div>
       <div id="venc" hidden style="grid-column:1/-1"><label>Abonos (factura cambiaria)</label><div id="abs"></div><button type="button" class="btn sm" id="abAdd">+ Abono</button><div class="hint">Con un solo abono se cobra el total; con varios, la suma debe igualar el total.</div></div>
@@ -392,6 +396,11 @@ function vistaNueva() {
   $('abs').addEventListener('click', e => { if (e.target.closest('[data-q]')) { abonos.splice(e.target.closest('[data-a]').dataset.a, 1); pintarAbonos(); } });
   $('abAdd').onclick = () => { abonos.push({ fecha: abonos[abonos.length - 1].fecha, monto: 0 }); pintarAbonos(); };
   pintarAbonos();
+  $('rt').onchange = () => {
+    $('recf').innerHTML = (RECI_CAMPOS[$('rt').value] || []).map(([n, l, op], i) => `<div><label for="rf${i}">${l}</label>${op
+      ? `<select id="rf${i}" data-n="${n}">${op.map(o => `<option>${o}</option>`).join('')}</select>`
+      : `<input id="rf${i}" data-n="${n}">`}</div>`).join('');
+  };
   const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
   $('xm').onchange = () => totales();
   $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
@@ -427,8 +436,9 @@ function vistaNueva() {
       if (!esNota(tipo) && (!f.exportacion.destinatario || !f.exportacion.direccion)) return toast('Indica el destinatario y su dirección para la exportación');
     }
     if (tipo === 'RECI' && $('rt').value) {
-      f.recibo = { tipo: $('rt').value, alumno: $('ra').value.trim(), carne: $('rc').value.trim(), unidad: $('ru').value.trim() };
-      if (f.recibo.tipo !== 'Inmobiliaria' && (!f.recibo.alumno || !f.recibo.carne)) return toast('Indica el nombre del alumno y su carné');
+      f.recibo = { tipo: $('rt').value, campos: {} };
+      $('recf').querySelectorAll('[data-n]').forEach(el => { f.recibo.campos[el.dataset.n] = el.value.trim(); });
+      if (f.recibo.tipo !== 'Inmobiliaria' && (!f.recibo.campos.NombreAlumno || !f.recibo.campos.Carne)) return toast('Indica el nombre del alumno y su carné');
     }
     if (tipo === 'RDON') {
       f.personeria = $('pf').value.trim();
