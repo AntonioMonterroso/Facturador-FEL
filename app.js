@@ -478,8 +478,8 @@ function vistaNueva() {
     e.preventDefault();
     const nit = normNIT($('nit').value), nombre = $('nom').value.trim();
     if (!validarNIT(nit) && !esCUI(nit)) return toast('El NIT o CUI del receptor no es válido');
-    if (!nombre) return toast('Falta el nombre del receptor');
-    if (items.some(i => !i.descripcion.trim() || !(i.cantidad > 0))) return toast('Completa la descripción y cantidad de cada línea');
+    if (nombre.length < 3) return toast('El nombre del receptor debe tener al menos 3 caracteres');
+    if (items.some(i => i.descripcion.trim().length < 2 || !(i.cantidad > 0))) return toast('Completa la descripción y cantidad de cada línea');
     const expo = expoOn();
     const c = calcular(items, EXENTOS.has(tipo0()) || expo);
     if (c.total <= 0) return toast('El total debe ser mayor a cero');
@@ -605,7 +605,9 @@ function vistaConfig() {
     ev.preventDefault();
     const nit = normNIT($('en').value);
     if (nit === 'CF' || !validarNIT(nit)) { $('enErr').textContent = 'NIT inválido'; return; }
-    if (!$('eno').value.trim()) return toast('Falta la razón social');
+    if ($('eno').value.trim().length < 3) return toast('La razón social debe tener al menos 3 caracteres');
+    if ($('ed').value.trim().length < 3) return toast('Indica la dirección fiscal (mínimo 3 caracteres)');
+    if ($('ec').value.trim() && !/^[a-zA-ZñÑ0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test($('ec').value.trim())) return toast('El correo del emisor no es válido');
     S.emisor = { nit, nombre: $('eno').value.trim(), comercial: $('eco').value.trim(), direccion: $('ed').value.trim(), codigoPostal: $('ecp').value.trim(), municipio: $('emu').value.trim(), departamento: $('ede').value.trim(), serie: $('es').value.trim() || 'FACE-A', correo: $('ec').value.trim() };
     guardar(); toast('Emisor guardado');
   };
