@@ -4,7 +4,7 @@
 const http = require('http');
 const assert = require('assert');
 
-const llamadas = { login: [], nuc: [], anular: [], shared: [] };
+const llamadas = { login: [], nuc: [], anular: [], shared: [], doc: [] };
 let tokenActual = 'TOKEN-1', modo = 'ok';
 const falso = http.createServer((req, res) => {
   const trozos = [];
@@ -22,6 +22,12 @@ const falso = http.createServer((req, res) => {
       if (req.headers.authorization !== tokenActual) { res.statusCode = 401; return res.end('{}'); }
       if (modo === 'error') return res.end(JSON.stringify({ code: 5001, message: 'Error en contenido del XML', description: 'NIT inválido' }));
       return res.end(JSON.stringify({ code: 1, authNumber: 'AAAA-BBBB', batch: 'AAAA', serial: '123', issuedTimeStamp: '2026-01-01T10:00:00', enrolledTimeStamp: '2026-01-01T10:00:05', responseData1: 'eG1s', responseData3: 'cGRm' }));
+    }
+    if (url.pathname === '/api/GetDocument') {
+      llamadas.doc.push({ query: Object.fromEntries(url.searchParams), auth: req.headers.authorization, metodo: req.method });
+      if (req.headers.authorization !== tokenActual) { res.statusCode = 401; return res.end('{}'); }
+      if (url.searchParams.get('AUTHNUMBER') === '00000000-0000-0000-0000-000000000000') return res.end(JSON.stringify({ REQUEST_DATA: [{ Codigo: '0', Mensaje: 'Documento no encontrado' }], RESPONSE: [] }));
+      return res.end(JSON.stringify({ RESPONSE: [{ ResponseData1: '', ResponseData2: 'PCFET0NU', ResponseData3: 'JVBERi0x' }] }));
     }
     if (url.pathname === '/api/Shared') {
       llamadas.shared.push({ query: Object.fromEntries(url.searchParams), auth: req.headers.authorization, metodo: req.method });
@@ -54,6 +60,12 @@ const postA = (puerto, cuerpo, cabeceras) => new Promise((resolve, reject) => {
 });
 const getC = (puerto, query, cabeceras) => new Promise((resolve, reject) => {
   http.get({ port: puerto, path: '/api/consultar' + query, headers: cabeceras }, res => {
+    const t = []; res.on('data', c => t.push(c));
+    res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(t).toString() || '{}') }));
+  }).on('error', reject);
+});
+const getD = (puerto, query, cabeceras) => new Promise((resolve, reject) => {
+  http.get({ port: puerto, path: '/api/documento' + query, headers: cabeceras }, res => {
     const t = []; res.on('data', c => t.push(c));
     res.on('end', () => resolve({ status: res.statusCode, json: JSON.parse(Buffer.concat(t).toString() || '{}') }));
   }).on('error', reject);
@@ -114,7 +126,14 @@ falso.listen(0, '127.0.0.1', async () => {
       assert.strictEqual(r.status, 422); assert.strictEqual(r.json.ok, false); assert.strictEqual(r.json.mensaje, 'No encontrado');
       assert.strictEqual((await getC(p, '?autorizacion=x', H)).status, 400);
       assert.strictEqual((await getC(p, '?autorizacion=BDE0DEC2-5ABE-468E-A6F1-0AB3637F2764', {})).status, 400);
-      console.log('OK    servidor intermedio (certificar, consultar, anular, token vencido, errores y defensas)');
+      // 7) Descarga del documento (HTML y PDF en base64)
+      r = await getD(p, '?autorizacion=4D19A6D5-05B6-4D96-9EA4-7D75620B48CE', H);
+      assert.strictEqual(r.status, 200); assert.deepStrictEqual([r.json.ok, r.json.html, r.json.pdf], [true, 'PCFET0NU', 'JVBERi0x']);
+      assert.deepStrictEqual(llamadas.doc[0].query, { AUTHNUMBER: '4D19A6D5-05B6-4D96-9EA4-7D75620B48CE', TAXID: '000000123456', FORMAT: 'HTML|PDF', USERNAME: 'USER_TEST' });
+      r = await getD(p, '?autorizacion=00000000-0000-0000-0000-000000000000', H);
+      assert.strictEqual(r.status, 422); assert.strictEqual(r.json.mensaje, 'Documento no encontrado');
+      assert.strictEqual((await getD(p, '?autorizacion=4D19A6D5-05B6-4D96-9EA4-7D75620B48CE', {})).status, 400);
+      console.log('OK    servidor intermedio (certificar, descargar, consultar, anular, token vencido, errores y defensas)');
     } catch (e) {
       console.log('FALLA servidor intermedio\n' + e.message); process.exitCode = 1;
     } finally { servidor.close(); falso.close(); }
