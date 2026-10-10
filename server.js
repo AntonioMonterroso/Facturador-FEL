@@ -3,6 +3,7 @@
  * Servidor local del Facturador FEL (sin dependencias).
  *  - Sirve la app (index.html, styles.css, app.js).
  *  - POST /api/certificar  { xml }  -> envía el NUC-XML a Digifact y devuelve la autorización.
+ *  - GET  /api/consultar?autorizacion=UUID -> consulta en Digifact un documento ya certificado.
  *  - POST /api/anular      { autorizacion, idReceptor, fechaEmision, motivo } -> anula un documento certificado.
  * Las credenciales viven solo en variables de entorno de este proceso; nunca llegan al navegador.
  *
@@ -84,7 +85,7 @@ async function conToken(enviar) {
 
 async function certificar(xml) {
   const { usuario, nit } = credenciales();
-  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit)}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
+  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit12(nit))}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
   const r = await conToken(tk => pedir(url, { method: 'POST', headers: { 'Content-Type': 'application/xml', Authorization: tk }, cuerpo: xml }));
   let j;
   try { j = JSON.parse(r.texto); } catch { throw Object.assign(new Error('Respuesta inesperada de Digifact (HTTP ' + r.status + ')'), { status: 502 }); }
@@ -99,6 +100,19 @@ async function certificar(xml) {
       xml: j.responseData1 || '', pdf: j.responseData3 || ''
     }
   };
+}
+
+/** Consulta un documento certificado (GET /api/Shared, SHARED_GETDTEINFO). */
+async function consultar(autorizacion) {
+  const { usuario, nit } = credenciales();
+  const url = `${BASE}/api/Shared?COUNTRY=GT&TAXID=${encodeURIComponent(nit12(nit))}&DATA1=SHARED_GETDTEINFO&DATA2=${encodeURIComponent('AUTHNUMBER|' + autorizacion)}&USERNAME=${encodeURIComponent(usuario)}`;
+  const r = await conToken(tk => pedir(url, { method: 'GET', headers: { Authorization: tk } }));
+  let j = {};
+  try { j = JSON.parse(r.texto); } catch { throw Object.assign(new Error('Respuesta inesperada de Digifact (HTTP ' + r.status + ')'), { status: 502 }); }
+  const info = (j.REQUEST_DATA || [])[0] || {};
+  const doc = (j.RESPONSE || [])[0];
+  if (r.status !== 200 || Number(info.Codigo) !== 1 || !doc) return { status: 422, cuerpo: { ok: false, codigo: info.Codigo, mensaje: info.Mensaje || 'Documento no encontrado' } };
+  return { status: 200, cuerpo: { ok: true, tipo: doc.TIPO_DTE, guid: doc.GUID, serie: doc.SERIE, numero: doc.NUMERO, total: doc.TOTAL, xml: doc.DTE || '' } };
 }
 
 const RE_AUTORIZACION = /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/;
@@ -145,6 +159,13 @@ const servidor = http.createServer(async (req, res) => {
       try { datos = JSON.parse(await leerCuerpo(req)); } catch (e) { if (e.status) throw e; return responder(res, 400, { ok: false, mensaje: 'JSON inválido' }); }
       if (typeof datos.xml !== 'string' || !datos.xml.includes('<Root>')) return responder(res, 400, { ok: false, mensaje: 'Falta el XML del documento' });
       const r = await certificar(datos.xml);
+      return responder(res, r.status, r.cuerpo);
+    }
+    if (req.method === 'GET' && ruta === '/api/consultar') {
+      if (req.headers['x-requested-with'] !== 'facturador') return responder(res, 400, { ok: false, mensaje: 'Petición no permitida' });
+      const autorizacion = new URL(req.url, 'http://localhost').searchParams.get('autorizacion') || '';
+      if (!RE_AUTORIZACION.test(autorizacion)) return responder(res, 400, { ok: false, mensaje: 'Número de autorización inválido' });
+      const r = await consultar(autorizacion);
       return responder(res, r.status, r.cuerpo);
     }
     if (req.method === 'POST' && ruta === '/api/anular') {

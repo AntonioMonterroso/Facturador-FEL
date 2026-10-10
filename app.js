@@ -565,6 +565,7 @@ function vistaFactura(id) {
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${XML_TIPOS.includes(f.tipo) && !f.certificacion && !f.anulada ? '<button class="btn primary" id="cert">Certificar con Digifact</button>' : ''}
     ${f.certificacion && f.certificacion.pdf ? '<button class="btn" id="pdfc">Descargar PDF certificado</button>' : ''}
+    ${f.certificacion ? '<button class="btn" id="verif">Verificar en Digifact</button>' : ''}
     ${f.certificacion && !f.anulada ? '<button class="btn danger" id="anular">Anular ante la SAT</button>' : ''}
     ${f.anulada || f.certificacion ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
@@ -583,6 +584,20 @@ function vistaFactura(id) {
       f.certificacion = { autorizacion: j.autorizacion, serie: j.serie, numero: j.numero, fecha: j.certificacion, pdf: j.pdf };
       guardar(); toast('Documento certificado'); vistaFactura(id);
     } catch { libre(); toast('No se pudo conectar con el servidor. Inicia la app con: node server.js'); }
+  };
+  const vf = $('verif');
+  if (vf) vf.onclick = async () => {
+    vf.disabled = true;
+    try {
+      const r = await fetch('/api/consultar?autorizacion=' + encodeURIComponent(f.certificacion.autorizacion), { headers: { 'X-Requested-With': 'facturador' } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) toast('Digifact: ' + (j.mensaje || 'no se pudo verificar el documento'));
+      else {
+        const dif = String(j.serie) !== String(f.certificacion.serie) || String(j.numero) !== String(f.certificacion.numero) || Math.abs(Number(j.total) - calcF(f).total) > 0.005;
+        toast(dif ? `Atención: Digifact reporta ${j.tipo} ${j.serie}-${j.numero} por ${money(j.total)} y no coincide con el documento local` : `Confirmado en Digifact: ${j.tipo} ${j.serie}-${j.numero} · ${money(j.total)}`);
+      }
+    } catch { toast('No se pudo conectar con el servidor. Inicia la app con: node server.js'); }
+    vf.disabled = false;
   };
   const an = $('anular');
   if (an) an.onclick = async () => {
