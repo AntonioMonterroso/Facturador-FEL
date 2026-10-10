@@ -2,18 +2,18 @@
 
 /* ---------- Utilidades ---------- */
 const IVA = 0.12;
-const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación', RECI: 'Recibo', FPEC: 'Factura pequeño contribuyente', FCPC: 'Cambiaria pequeño contribuyente' };
-const EXENTOS = new Set(['NABN', 'RDON', 'RECI', 'FPEC', 'FCPC']); // sin IVA
+const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación', RECI: 'Recibo', FPEC: 'Factura pequeño contribuyente', FCPC: 'Cambiaria pequeño contribuyente', FARP: 'Factura (FARP)', FCRP: 'Factura cambiaria (FCRP)' };
+const EXENTOS = new Set(['NABN', 'RDON', 'RECI', 'FPEC', 'FCPC', 'FARP', 'FCRP']); // sin IVA
 const calcF = f => calcular(f.items, EXENTOS.has(f.tipo) || !!f.exportacion); // exportación: IVA 0%
 const INCOTERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'];
 const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total }];
 const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
-const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']], FPEC: [['1', '3', '1'], ['2', '11', '1']], FCPC: [['1', '3', '1'], ['2', '11', '1']] };
-const AFILIACION = { FPEC: 'PEC', FCPC: 'PEC' }; // el resto va como GEN
-const esCambiaria = t => t === 'FCAM' || t === 'FCPC';
-const NUM_ACCESO = new Set(['FPEC', 'FCPC']);
+const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']], FPEC: [['1', '3', '1'], ['2', '11', '1']], FCPC: [['1', '3', '1'], ['2', '11', '1']], FARP: [['1', '3', '1'], ['2', '10', '1']], FCRP: [['1', '3', '1'], ['2', '10', '1']] };
+const AFILIACION = { FPEC: 'PEC', FCPC: 'PEC', FARP: 'PRI', FCRP: 'PRI' }; // el resto va como GEN
+const esCambiaria = t => t === 'FCAM' || t === 'FCPC' || t === 'FCRP';
+const NUM_ACCESO = new Set(['FPEC', 'FCPC', 'FARP', 'FCRP']);
 const numAcceso = () => String(100000000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000000);
 /** Datos de cabecera adicionales: [nombre, valor]. */
 const infoCab = f => [...(f.tipo === 'RDON' ? [['TipoPersoneria', f.personeria]] : []), ...(f.exportacion ? [['Exp', 'SI']] : []), ...(f.numeroAcceso ? [['NumeroAcceso', f.numeroAcceso]] : [])];
@@ -23,6 +23,9 @@ const RECI_CAMPOS = {
   Colegio: [['NombreAlumno', 'Nombre del alumno'], ['Carne', 'Carné'], ['Grado', 'Grado'], ['Seccion', 'Sección'], ['Jornada', 'Jornada'], ['TipoDePago', 'Tipo de pago'], ['NoReferencia', 'No. de referencia'], ['Banco', 'Banco'], ['Total', 'Total pagado'], ['Observaciones', 'Observaciones']],
   Inmobiliaria: [['MZ', 'Manzana (MZ)'], ['APTO', 'Apartamento / lote'], ['TipoPago', 'Tipo de pago', ['Abono', 'Cancelado']]]
 };
+/** Facturas con armas y municiones: datos adicionales en la adenda. */
+const ARMAS = [['Tenencia', 'Tenencia'], ['Licencia', 'Licencia'], ['Autorizacion', 'Autorización'], ['DIGECAM', 'DIGECAM'], ['Otros', 'Otros']];
+const infoArmas = f => f.armas ? ARMAS.map(([n]) => [n, f.armas[n]]).filter(([, v]) => v) : [];
 const infoRecibo = f => f.recibo ? [['Tipo', f.recibo.tipo], ...RECI_CAMPOS[f.recibo.tipo].map(([n]) => [n, f.recibo.campos[n]])].filter(([, v]) => v) : [];
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
 const esNota = t => t === 'NCRE' || t === 'NDEB';
@@ -188,7 +191,10 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
     </AdditionalInfo>` : ''}
     <AdditionalInfo>
       <Code>${x(f.uuid)}</Code>
-      <Type>ADENDA</Type>
+      <Type>ADENDA</Type>${infoArmas(f).length ? `
+      <AditionalData><Data Name="INFORMACION_ADICIONAL">${infoArmas(f).map(([n, v]) => `
+        <Info Name="${n}" Value="${x(v)}"/>`).join('')}
+      </Data></AditionalData>` : ''}
       <AditionalInfo>
         <Info Name="VALIDAR_REFERENCIA_INTERNA" Value="NO_VALIDAR"/>${infoRecibo(f).map(([n, v]) => `
         <Info Name="${n}" Value="${x(v)}"/>`).join('')}
@@ -264,7 +270,7 @@ function generarJSON(f) {
           { Name: 'NumeroDocumentoOrigen', Data: null, Value: f.origen.numero }
         ]
       }] : []),
-      { Code: f.uuid, Type: 'ADENDA', AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }, ...infoRecibo(f).map(([Name, Value]) => ({ Name, Data: null, Value }))] }
+      { Code: f.uuid, Type: 'ADENDA', ...(infoArmas(f).length ? { AditionalData: { Data: [{ Info: infoArmas(f).map(([Name, Value]) => ({ Name, Data: null, Value })), Name: 'INFORMACION_ADICIONAL' }] } } : {}), AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }, ...infoRecibo(f).map(([Name, Value]) => ({ Name, Data: null, Value }))] }
     ] }
   }, null, 2);
 }
@@ -344,6 +350,8 @@ function vistaNueva() {
         <select id="rt"><option value="">Ninguno</option>${Object.keys(RECI_CAMPOS).map(t => `<option>${t}</option>`).join('')}</select>
         <div id="recf" class="grid two" style="margin-top:8px"></div>
       </div>
+      <div id="arm" style="grid-column:1/-1"><label><input type="checkbox" id="xa" style="width:auto"> Armas y municiones</label>
+        <div id="xaf" class="grid two" hidden style="margin-top:8px">${ARMAS.map(([n, l], i) => `<div><label for="ar${i}">${l}</label><input id="ar${i}" data-n="${n}"></div>`).join('')}</div></div>
       <div id="pers" hidden><label for="pf">Tipo de personería (RDON)</label><input id="pf" value="734" inputmode="numeric"></div>
       <div id="venc" hidden style="grid-column:1/-1"><label>Abonos (factura cambiaria)</label><div id="abs"></div><button type="button" class="btn sm" id="abAdd">+ Abono</button><div class="hint">Con un solo abono se cobra el total; con varios, la suma debe igualar el total.</div></div>
       <div id="orig" class="grid two" hidden style="grid-column:1/-1">
@@ -407,10 +415,11 @@ function vistaNueva() {
       ? `<select id="rf${i}" data-n="${n}">${op.map(o => `<option>${o}</option>`).join('')}</select>`
       : `<input id="rf${i}" data-n="${n}">`}</div>`).join('');
   };
+  $('xa').onchange = () => { $('xaf').hidden = !$('xa').checked; };
   const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
   $('xm').onchange = () => totales();
   $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
-  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = !esCambiaria($('tipo').value); $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); totales(); };
+  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = !esCambiaria($('tipo').value); $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = !['RECI', 'RDON'].includes($('tipo').value); $('arm').hidden = $('tipo').value !== 'FACT'; totales(); };
   $('cli').onchange = e => {
     const c = S.clientes[e.target.value];
     $('nit').value = c ? c.nit : 'CF'; $('nom').value = c ? c.nombre : 'Consumidor Final';
@@ -431,6 +440,10 @@ function vistaNueva() {
     const tipo = $('tipo').value, serie = S.emisor.serie || 'FACE-A';
     const k = serie + '|' + tipo;
     const f = { uuid: uuid(), tipo, serie, numero: 0, fecha: new Date().toISOString(), cliente: { nit, nombre, direccion: '' }, items: items.map(i => ({ ...i, descripcion: i.descripcion.trim() })), anulada: false };
+    if (tipo === 'FACT' && $('xa').checked) {
+      f.armas = {};
+      $('xaf').querySelectorAll('[data-n]').forEach(el => { f.armas[el.dataset.n] = el.value.trim(); });
+    }
     if (NUM_ACCESO.has(tipo)) f.numeroAcceso = numAcceso();
     if (esCambiaria(tipo)) {
       f.abonos = abonos.map(a => ({ fecha: a.fecha, monto: abonos.length === 1 ? c.total : r2(a.monto) }));
@@ -483,7 +496,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON', 'FPEC', 'FCPC'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON', 'FPEC', 'FCPC', 'FARP', 'FCRP'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
