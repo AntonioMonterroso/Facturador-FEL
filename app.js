@@ -2,15 +2,17 @@
 
 /* ---------- Utilidades ---------- */
 const IVA = 0.12;
-const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación' };
-const EXENTOS = new Set(['NABN', 'RDON']); // sin IVA
+const TIPOS = { FACT: 'Factura', FCAM: 'Factura cambiaria', NCRE: 'Nota de crédito', NDEB: 'Nota de débito', FESP: 'Factura especial', NABN: 'Nota de abono', RDON: 'Recibo por donación', RECI: 'Recibo' };
+const EXENTOS = new Set(['NABN', 'RDON', 'RECI']); // sin IVA
 const calcF = f => calcular(f.items, EXENTOS.has(f.tipo) || !!f.exportacion); // exportación: IVA 0%
 const INCOTERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'];
 const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total }];
 const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
-const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']] };
+const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']] };
+/** Datos opcionales del recibo (universidad, colegio, inmobiliaria) que viajan en la adenda. */
+const infoRecibo = f => f.recibo ? [['Tipo', f.recibo.tipo], ['NombreAlumno', f.recibo.alumno], ['Carne', f.recibo.carne], ['UnidadAcademica', f.recibo.unidad]].filter(([, v]) => v) : [];
 const RET_ISR = 0.05; // Retención ISR de FESP sobre el monto gravable (tasa de 5%; no contempla el tramo de 7%)
 const esNota = t => t === 'NCRE' || t === 'NDEB';
 const money = (n, mon = 'GTQ') => (mon === 'USD' ? 'US$ ' : 'Q ') + (Number(n) || 0).toLocaleString('es-GT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -176,7 +178,10 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
     <AdditionalInfo>
       <Code>${x(f.uuid)}</Code>
       <Type>ADENDA</Type>
-      <AditionalInfo><Info Name="VALIDAR_REFERENCIA_INTERNA" Value="NO_VALIDAR"/></AditionalInfo>
+      <AditionalInfo>
+        <Info Name="VALIDAR_REFERENCIA_INTERNA" Value="NO_VALIDAR"/>${infoRecibo(f).map(([n, v]) => `
+        <Info Name="${n}" Value="${x(v)}"/>`).join('')}
+      </AditionalInfo>
     </AdditionalInfo>
   </AdditionalDocumentInfo>
 </Root>
@@ -248,7 +253,7 @@ function generarJSON(f) {
           { Name: 'NumeroDocumentoOrigen', Data: null, Value: f.origen.numero }
         ]
       }] : []),
-      { Code: f.uuid, Type: 'ADENDA', AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }] }
+      { Code: f.uuid, Type: 'ADENDA', AditionalInfo: [{ Name: 'VALIDAR_REFERENCIA_INTERNA', Data: null, Value: 'NO_VALIDAR' }, ...infoRecibo(f).map(([Name, Value]) => ({ Name, Data: null, Value }))] }
     ] }
   }, null, 2);
 }
@@ -323,6 +328,12 @@ function vistaNueva() {
           <div><label for="xi">INCOTERM</label><select id="xi">${INCOTERMS.map(i => `<option>${i}</option>`).join('')}</select></div>
           <div><label for="xm">Moneda</label><select id="xm"><option value="USD">USD</option><option value="GTQ">GTQ</option></select></div>
         </div></div>
+      <div id="rec" class="grid two" hidden style="grid-column:1/-1">
+        <div><label for="rt">Tipo de recibo</label><select id="rt"><option value="">Ninguno</option><option>Universidad</option><option>Colegio</option><option>Inmobiliaria</option></select></div>
+        <div><label for="ra">Nombre del alumno</label><input id="ra"></div>
+        <div><label for="rc">Carné</label><input id="rc"></div>
+        <div><label for="ru">Unidad académica</label><input id="ru"></div>
+      </div>
       <div id="pers" hidden><label for="pf">Tipo de personería (RDON)</label><input id="pf" value="734" inputmode="numeric"></div>
       <div id="venc" hidden style="grid-column:1/-1"><label>Abonos (factura cambiaria)</label><div id="abs"></div><button type="button" class="btn sm" id="abAdd">+ Abono</button><div class="hint">Con un solo abono se cobra el total; con varios, la suma debe igualar el total.</div></div>
       <div id="orig" class="grid two" hidden style="grid-column:1/-1">
@@ -384,7 +395,7 @@ function vistaNueva() {
   const expoOn = () => ['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value) && $('xc').checked;
   $('xm').onchange = () => totales();
   $('xc').onchange = () => { $('xf').hidden = !$('xc').checked || esNota($('tipo').value); totales(); };
-  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; totales(); };
+  $('tipo').onchange = () => { $('expo').hidden = !['FACT', 'FCAM', 'NCRE', 'NDEB'].includes($('tipo').value); $('xf').hidden = !$('xc').checked || esNota($('tipo').value); $('venc').hidden = $('tipo').value !== 'FCAM'; $('orig').hidden = !esNota($('tipo').value); $('pers').hidden = $('tipo').value !== 'RDON'; $('rec').hidden = $('tipo').value !== 'RECI'; totales(); };
   $('cli').onchange = e => {
     const c = S.clientes[e.target.value];
     $('nit').value = c ? c.nit : 'CF'; $('nom').value = c ? c.nombre : 'Consumidor Final';
@@ -414,6 +425,10 @@ function vistaNueva() {
     if (expo) {
       f.exportacion = { destinatario: $('xd').value.trim(), direccion: $('xr').value.trim(), incoterm: $('xi').value, moneda: $('xm').value };
       if (!esNota(tipo) && (!f.exportacion.destinatario || !f.exportacion.direccion)) return toast('Indica el destinatario y su dirección para la exportación');
+    }
+    if (tipo === 'RECI' && $('rt').value) {
+      f.recibo = { tipo: $('rt').value, alumno: $('ra').value.trim(), carne: $('rc').value.trim(), unidad: $('ru').value.trim() };
+      if (f.recibo.tipo !== 'Inmobiliaria' && (!f.recibo.alumno || !f.recibo.carne)) return toast('Indica el nombre del alumno y su carné');
     }
     if (tipo === 'RDON') {
       f.personeria = $('pf').value.trim();
@@ -451,7 +466,7 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
     ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
