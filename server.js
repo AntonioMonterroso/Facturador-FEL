@@ -1,0 +1,137 @@
+'use strict';
+/**
+ * Servidor local del Facturador FEL (sin dependencias).
+ *  - Sirve la app (index.html, styles.css, app.js).
+ *  - POST /api/certificar  { xml }  -> envía el NUC-XML a Digifact y devuelve la autorización.
+ * Las credenciales viven solo en variables de entorno de este proceso; nunca llegan al navegador.
+ *
+ * Variables de entorno:
+ *   DIGIFACT_USUARIO, DIGIFACT_CLAVE, DIGIFACT_NIT   credenciales de pruebas (obligatorias)
+ *   DIGIFACT_BASE         base de la API (por defecto https://testnucgt.digifact.com)
+ *   DIGIFACT_FORMAT       FORMAT de la consulta (por defecto XML,HTML,PDF)
+ *   DIGIFACT_LOGIN_PATH   ruta para pedir el token (por defecto /api/login/get_token)  *** POR VERIFICAR ***
+ *   DIGIFACT_LOGIN_USER   usuario completo del login (por defecto GT.<NIT>.<USUARIO>)   *** POR VERIFICAR ***
+ *   PORT, HOST            (por defecto 3000 y 127.0.0.1)
+ */
+const http = require('http');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
+const { URL } = require('url');
+
+const ENV = process.env;
+const BASE = (ENV.DIGIFACT_BASE || 'https://testnucgt.digifact.com').replace(/\/$/, '');
+const ESTATICOS = { '/': 'index.html', '/index.html': 'index.html', '/styles.css': 'styles.css', '/app.js': 'app.js' };
+const TIPOS = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+const MAX_CUERPO = 1024 * 1024;
+
+/** Petición HTTP(S) simple que devuelve { status, texto }. */
+function pedir(urlStr, { method = 'GET', headers = {}, cuerpo } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const lib = u.protocol === 'http:' ? http : https;
+    const req = lib.request(u, { method, headers, timeout: 30000 }, res => {
+      const trozos = [];
+      res.on('data', c => trozos.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, texto: Buffer.concat(trozos).toString('utf8') }));
+    });
+    req.on('timeout', () => req.destroy(new Error('Tiempo de espera agotado al contactar a Digifact')));
+    req.on('error', reject);
+    if (cuerpo) req.write(cuerpo);
+    req.end();
+  });
+}
+
+let token = null; // { valor, hasta }
+
+function credenciales() {
+  const faltan = ['DIGIFACT_USUARIO', 'DIGIFACT_CLAVE', 'DIGIFACT_NIT'].filter(k => !ENV[k]);
+  if (faltan.length) throw Object.assign(new Error('Faltan variables de entorno: ' + faltan.join(', ')), { status: 500 });
+  return { usuario: ENV.DIGIFACT_USUARIO, clave: ENV.DIGIFACT_CLAVE, nit: ENV.DIGIFACT_NIT };
+}
+
+/** Obtiene (y guarda en memoria) el token de Digifact. El contrato de este login está por verificar con la documentación. */
+async function obtenerToken(forzar) {
+  if (!forzar && token && token.hasta > Date.now()) return token.valor;
+  const { usuario, clave, nit } = credenciales();
+  const loginUser = ENV.DIGIFACT_LOGIN_USER || `GT.${nit}.${usuario}`;
+  const r = await pedir(BASE + (ENV.DIGIFACT_LOGIN_PATH || '/api/login/get_token'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    cuerpo: JSON.stringify({ Username: loginUser, Password: clave })
+  });
+  let j = {};
+  try { j = JSON.parse(r.texto); } catch { /* respuesta no JSON */ }
+  const valor = j.Token || j.token;
+  if (r.status !== 200 || !valor) throw Object.assign(new Error('No se pudo iniciar sesión en Digifact (HTTP ' + r.status + ')'), { status: 502 });
+  token = { valor, hasta: Date.now() + 25 * 60 * 1000 };
+  return valor;
+}
+
+async function certificar(xml) {
+  const { usuario, nit } = credenciales();
+  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit)}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
+  const enviar = async tk => pedir(url, { method: 'POST', headers: { 'Content-Type': 'application/xml', Authorization: tk }, cuerpo: xml });
+  let r = await enviar(await obtenerToken(false));
+  if (r.status === 401) r = await enviar(await obtenerToken(true)); // token vencido: un reintento
+  let j;
+  try { j = JSON.parse(r.texto); } catch { throw Object.assign(new Error('Respuesta inesperada de Digifact (HTTP ' + r.status + ')'), { status: 502 }); }
+  if (Number(j.code) !== 1) {
+    return { status: 422, cuerpo: { ok: false, codigo: j.code, mensaje: j.message || '', descripcion: j.description || '' } };
+  }
+  return {
+    status: 200,
+    cuerpo: {
+      ok: true, autorizacion: j.authNumber, serie: j.batch, numero: j.serial,
+      emision: j.issuedTimeStamp, certificacion: j.enrolledTimeStamp,
+      xml: j.responseData1 || '', pdf: j.responseData3 || ''
+    }
+  };
+}
+
+function leerCuerpo(req) {
+  return new Promise((resolve, reject) => {
+    let total = 0; const trozos = [];
+    req.on('data', c => { total += c.length; if (total > MAX_CUERPO) { reject(Object.assign(new Error('Cuerpo demasiado grande'), { status: 413 })); req.destroy(); } else trozos.push(c); });
+    req.on('end', () => resolve(Buffer.concat(trozos).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+const responder = (res, status, obj) => {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(obj));
+};
+
+const servidor = http.createServer(async (req, res) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'");
+  try {
+    const ruta = new URL(req.url, 'http://localhost').pathname;
+    if (req.method === 'POST' && ruta === '/api/certificar') {
+      // Defensa básica contra peticiones de otros sitios: solo JSON con cabecera propia.
+      if (!(req.headers['content-type'] || '').startsWith('application/json') || req.headers['x-requested-with'] !== 'facturador') {
+        return responder(res, 400, { ok: false, mensaje: 'Petición no permitida' });
+      }
+      let datos;
+      try { datos = JSON.parse(await leerCuerpo(req)); } catch (e) { if (e.status) throw e; return responder(res, 400, { ok: false, mensaje: 'JSON inválido' }); }
+      if (typeof datos.xml !== 'string' || !datos.xml.includes('<Root>')) return responder(res, 400, { ok: false, mensaje: 'Falta el XML del documento' });
+      const r = await certificar(datos.xml);
+      return responder(res, r.status, r.cuerpo);
+    }
+    if (req.method === 'GET' && ESTATICOS[ruta]) {
+      const archivo = ESTATICOS[ruta];
+      res.writeHead(200, { 'Content-Type': TIPOS[path.extname(archivo)] });
+      return fs.createReadStream(path.join(__dirname, archivo)).pipe(res);
+    }
+    responder(res, 404, { ok: false, mensaje: 'No encontrado' });
+  } catch (e) {
+    responder(res, e.status || 500, { ok: false, mensaje: e.message });
+  }
+});
+
+if (require.main === module) {
+  const puerto = Number(ENV.PORT) || 3000, host = ENV.HOST || '127.0.0.1';
+  servidor.listen(puerto, host, () => console.log(`Facturador FEL en http://${host}:${puerto} (Digifact: ${BASE})`));
+}
+module.exports = { servidor };

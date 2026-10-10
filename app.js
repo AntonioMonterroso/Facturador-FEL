@@ -9,9 +9,17 @@ const INCOTERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP'
 const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total }];
 const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
-// Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP y notas no llevan frases.
+// Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP no lleva frases.
 const FRASES = { FACT: [['1', '1', '1']], FCAM: [['1', '1', '1']], NABN: [['1', '9', '16'], ['2', '9', '17']], RDON: [['1', '4', '4']], RECI: [['1', '4', '5']], FPEC: [['1', '3', '1'], ['2', '11', '1']], FCPC: [['1', '3', '1'], ['2', '11', '1']], FARP: [['1', '3', '1'], ['2', '10', '1']], FCRP: [['1', '3', '1'], ['2', '10', '1']] };
-const AFILIACION = { FPEC: 'PEC', FCPC: 'PEC', FARP: 'PRI', FCRP: 'PRI' }; // el resto va como GEN
+const AFILIACIONES = { GEN: 'General', PEQ: 'Pequeño contribuyente', PEE: 'Pequeño contribuyente electrónico agropecuario', EXE: 'Exento / no aplica', PRI: 'Régimen primario', PEC: 'Régimen pecuario' };
+const afiliacionDe = () => S.emisor.afiliacion || 'GEN';
+/** Frases del DTE: la frase 1 (ISR) usa el escenario configurado en el emisor; NCRE y NDEB también la llevan (la SAT las rechaza sin ella). */
+const frasesDe = f => {
+  let base = esNota(f.tipo) ? [['1', '1', '1']] : FRASES[f.tipo];
+  if (!base) return null;
+  base = base.map(([d, t, e]) => (d === '1' && t === '1' ? [d, t, String(S.emisor.escenarioISR || 1)] : [d, t, e]));
+  return f.exportacion && !esNota(f.tipo) ? [...base, ['2', '4', '1']] : base;
+};
 const esCambiaria = t => t === 'FCAM' || t === 'FCPC' || t === 'FCRP';
 const NUM_ACCESO = new Set(['FPEC', 'FCPC', 'FARP', 'FCRP']);
 const numAcceso = () => String(100000000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000000);
@@ -77,7 +85,7 @@ function calcular(items, exento = false) {
 /* ---------- Estado ---------- */
 const KEY = 'facturador-fel-v1';
 const vacio = () => ({
-  emisor: { nit: '', nombre: '', comercial: '', direccion: '', codigoPostal: '01001', municipio: 'Guatemala', departamento: 'Guatemala', serie: 'FACE-A', correo: '' },
+  emisor: { nit: '', nombre: '', comercial: '', direccion: '', codigoPostal: '01001', municipio: 'Guatemala', departamento: 'Guatemala', serie: 'FACE-A', correo: '', afiliacion: 'GEN', escenarioISR: '1' },
   clientes: [], facturas: [], correlativo: {}
 });
 let S = vacio();
@@ -97,7 +105,7 @@ const fechaGT = iso => new Date(new Date(iso).getTime() - 6 * 3600e3).toISOStrin
 
 function generarXML(f) {
   const e = S.emisor, x = esc, c = calcF(f), expo = f.exportacion;
-  const fr = FRASES[f.tipo] && (expo ? [...FRASES[f.tipo], ['2', '4', '1']] : FRASES[f.tipo]);
+  const fr = frasesDe(f);
   const dir = (d, cp, mun, dep) => `<AddressInfo>
         <Address>${x(d)}</Address><City>${x(cp)}</City><District>${x(mun)}</District><State>${x(dep)}</State><Country>GT</Country>
       </AddressInfo>`;
@@ -133,7 +141,7 @@ ${EXENTOS.has(f.tipo) ? '' : `      <Taxes><Tax>
   </Header>
   <Seller>
     <TaxID>${x(e.nit)}</TaxID>
-    <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="${AFILIACION[f.tipo] || 'GEN'}"/></TaxIDAdditionalInfo>
+    <TaxIDAdditionalInfo><Info Name="AfiliacionIVA" Value="${afiliacionDe()}"/></TaxIDAdditionalInfo>
     <Name>${x(e.nombre)}</Name>
     ${e.correo ? `<Contact><EmailList><Email>${x(e.correo)}</Email></EmailList></Contact>` : ''}
     ${fr ? `<AdditionlInfo>${fr.map(([d, t, es]) => `
@@ -255,9 +263,9 @@ function generarJSON(f) {
     Version: '1.00', CountryCode: 'GT',
     Header: { DocType: f.tipo, IssuedDateTime: fechaGT(f.fecha), Currency: monedaDe(f), ...(infoCab(f).length ? { AdditionalIssueDocInfo: infoCab(f).map(([Name, Value]) => ({ Name, Data: null, Value })) } : {}) },
     Seller: {
-      TaxID: e.nit, TaxIDAdditionalInfo: [{ Name: 'AfiliacionIVA', Data: null, Value: AFILIACION[f.tipo] || 'GEN' }], Name: e.nombre,
+      TaxID: e.nit, TaxIDAdditionalInfo: [{ Name: 'AfiliacionIVA', Data: null, Value: afiliacionDe() }], Name: e.nombre,
       ...(e.correo ? { Contact: { EmailList: { Email: [e.correo] } } } : {}),
-      ...(FRASES[f.tipo] ? { AdditionlInfo: (expo ? [...FRASES[f.tipo], ['2', '4', '1']] : FRASES[f.tipo]).flatMap(([d, tf, esc]) => [{ Name: 'TipoFrase', Data: d, Value: tf }, { Name: 'Escenario', Data: d, Value: esc }]) } : {}),
+      ...(frasesDe(f) ? { AdditionlInfo: frasesDe(f).flatMap(([d, tf, esc]) => [{ Name: 'TipoFrase', Data: d, Value: tf }, { Name: 'Escenario', Data: d, Value: esc }]) } : {}),
       BranchInfo: { Code: '1', Name: e.comercial || e.nombre, AddressInfo: dir(e.direccion, e.codigoPostal || '01001', e.municipio || 'Guatemala', e.departamento || 'Guatemala') }
     },
     Buyer, ThirdParties: null, Items,
@@ -546,7 +554,9 @@ function vistaFactura(id) {
       ${c.lineas.map(l => `<tr><td>${l.cantidad}</td><td>${esc(l.descripcion)}</td><td class="r">${money(l.precio)}</td><td class="r">${money(l.desc)}</td><td class="r">${money(l.total)}</td></tr>`).join('')}
     </tbody></table></div>
     <div class="totals"><div><span>Subtotal sin IVA</span><span>${money(c.gravable)}</span></div><div><span>IVA 12%</span><span>${money(c.iva)}</span></div><div class="grand"><span>Total</span><span>${money(c.total)}</span></div></div>
-    <p class="legal">Sujeto a pagos trimestrales. · Borrador local: sin firma electrónica ni número de autorización de la SAT.<br>UUID interno: ${esc(f.uuid)}</p>
+    <p class="legal">${f.certificacion
+      ? `Documento certificado por Digifact.<br>Autorización: ${esc(f.certificacion.autorizacion)}<br>Serie: ${esc(f.certificacion.serie)} · Número: ${esc(f.certificacion.numero)}<br>Certificado el ${esc(f.certificacion.fecha)}`
+      : 'Borrador local: sin firma electrónica ni número de autorización de la SAT.'}<br>Referencia interna: ${esc(f.uuid)}</p>
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
@@ -594,6 +604,8 @@ function vistaConfig() {
     <div><label for="ecp">Código postal</label><input id="ecp" value="${esc(e.codigoPostal)}"></div>
     <div><label for="emu">Municipio</label><input id="emu" value="${esc(e.municipio)}"></div>
     <div><label for="ede">Departamento</label><input id="ede" value="${esc(e.departamento)}"></div>
+    <div><label for="eaf">Afiliación al IVA</label><select id="eaf">${Object.entries(AFILIACIONES).map(([k, v]) => `<option value="${k}" ${(e.afiliacion || 'GEN') === k ? 'selected' : ''}>${k} · ${v}</option>`).join('')}</select></div>
+    <div><label for="eis">Frase ISR (tipo 1) · escenario</label><select id="eis"><option value="1" ${String(e.escenarioISR || 1) === '1' ? 'selected' : ''}>Escenario 1</option><option value="2" ${String(e.escenarioISR) === '2' ? 'selected' : ''}>Escenario 2</option></select><div class="hint">Debe coincidir con tu régimen ante la SAT; confírmalo con tu contador.</div></div>
     <div><label for="es">Serie</label><input id="es" value="${esc(e.serie)}"></div>
     <div><label for="ec">Correo</label><input id="ec" type="email" value="${esc(e.correo)}"></div>
     <div><button class="btn primary">Guardar</button></div>
@@ -608,7 +620,7 @@ function vistaConfig() {
     if ($('eno').value.trim().length < 3) return toast('La razón social debe tener al menos 3 caracteres');
     if ($('ed').value.trim().length < 3) return toast('Indica la dirección fiscal (mínimo 3 caracteres)');
     if ($('ec').value.trim() && !/^[a-zA-ZñÑ0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test($('ec').value.trim())) return toast('El correo del emisor no es válido');
-    S.emisor = { nit, nombre: $('eno').value.trim(), comercial: $('eco').value.trim(), direccion: $('ed').value.trim(), codigoPostal: $('ecp').value.trim(), municipio: $('emu').value.trim(), departamento: $('ede').value.trim(), serie: $('es').value.trim() || 'FACE-A', correo: $('ec').value.trim() };
+    S.emisor = { nit, nombre: $('eno').value.trim(), comercial: $('eco').value.trim(), direccion: $('ed').value.trim(), codigoPostal: $('ecp').value.trim(), municipio: $('emu').value.trim(), departamento: $('ede').value.trim(), afiliacion: $('eaf').value, escenarioISR: $('eis').value, serie: $('es').value.trim() || 'FACE-A', correo: $('ec').value.trim() };
     guardar(); toast('Emisor guardado');
   };
   $('exp').onclick = () => descargar('respaldo-facturador.json', JSON.stringify(S, null, 2), 'application/json');
