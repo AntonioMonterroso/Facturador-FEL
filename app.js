@@ -7,6 +7,7 @@ const EXENTOS = new Set(['NABN', 'RDON', 'RECI', 'FPEC', 'FCPC', 'FARP', 'FCRP']
 const calcF = f => calcular(f.items, EXENTOS.has(f.tipo) || !!f.exportacion); // exportación: IVA 0%
 const INCOTERMS = ['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'];
 const abonosDe = f => f.abonos || [{ fecha: f.vencimiento, monto: calcF(f).total }];
+const XML_TIPOS = ['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON', 'FPEC', 'FCPC', 'FARP', 'FCRP'];
 const monedaDe = f => (f.exportacion && f.exportacion.moneda) || 'GTQ';
 const esCUI = n => /^\d{13}$/.test(n);
 // Frases del emisor por tipo: [código, TipoFrase, Escenario]. FESP no lleva frases.
@@ -560,14 +561,34 @@ function vistaFactura(id) {
   </article>
   <div class="actions" style="max-width:820px;margin:16px auto">
     <button class="btn primary" id="print">Imprimir / PDF</button>
-    ${!['FACT', 'FCAM', 'NCRE', 'NDEB', 'NABN', 'FESP', 'RECI', 'RDON', 'FPEC', 'FCPC', 'FARP', 'FCRP'].includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
+    ${!XML_TIPOS.includes(f.tipo) ? '' : '<button class="btn" id="xml">Descargar XML (Digifact)</button>'}
     <button class="btn" id="json">Descargar JSON (Digifact)</button>
-    ${f.anulada ? '' : '<button class="btn danger" id="void">Anular</button>'}
+    ${XML_TIPOS.includes(f.tipo) && !f.certificacion && !f.anulada ? '<button class="btn primary" id="cert">Certificar con Digifact</button>' : ''}
+    ${f.certificacion && f.certificacion.pdf ? '<button class="btn" id="pdfc">Descargar PDF certificado</button>' : ''}
+    ${f.anulada || f.certificacion ? '' : '<button class="btn danger" id="void">Anular</button>'}
     <a class="btn" href="#/facturas">Volver</a>
   </div>`;
   $('print').onclick = () => window.print();
   if ($('xml')) $('xml').onclick = () => descargar(`${f.tipo}-${f.serie}-${f.numero}.xml`, generarXML(f), 'application/xml');
   $('json').onclick = () => descargar(`${f.tipo}-${f.serie}-${f.numero}.json`, generarJSON(f), 'application/json');
+  const cb = $('cert');
+  if (cb) cb.onclick = async () => {
+    const libre = () => { cb.disabled = false; cb.textContent = 'Certificar con Digifact'; };
+    cb.disabled = true; cb.textContent = 'Certificando…';
+    try {
+      const r = await fetch('/api/certificar', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'facturador' }, body: JSON.stringify({ xml: generarXML(f) }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.ok) { libre(); return toast(j.mensaje ? 'Digifact: ' + j.mensaje + (j.descripcion ? ' · ' + j.descripcion : '') : 'No se pudo certificar. ¿Abriste la app con el servidor (node server.js)?'); }
+      f.certificacion = { autorizacion: j.autorizacion, serie: j.serie, numero: j.numero, fecha: j.certificacion, pdf: j.pdf };
+      guardar(); toast('Documento certificado'); vistaFactura(id);
+    } catch { libre(); toast('No se pudo conectar con el servidor. Inicia la app con: node server.js'); }
+  };
+  const pc = $('pdfc');
+  if (pc) pc.onclick = () => {
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(f.certificacion.pdf), c => c.charCodeAt(0))], { type: 'application/pdf' }));
+    const el = Object.assign(document.createElement('a'), { href: url, download: `${f.tipo}-${f.certificacion.serie}-${f.certificacion.numero}.pdf` });
+    document.body.appendChild(el); el.click(); el.remove(); URL.revokeObjectURL(url);
+  };
   const v = $('void');
   if (v) v.onclick = () => {
     if (!confirm('¿Anular este documento? Esta acción no se puede deshacer.')) return;

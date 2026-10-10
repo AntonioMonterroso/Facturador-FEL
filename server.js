@@ -9,8 +9,11 @@
  *   DIGIFACT_USUARIO, DIGIFACT_CLAVE, DIGIFACT_NIT   credenciales de pruebas (obligatorias)
  *   DIGIFACT_BASE         base de la API (por defecto https://testnucgt.digifact.com)
  *   DIGIFACT_FORMAT       FORMAT de la consulta (por defecto XML,HTML,PDF)
- *   DIGIFACT_LOGIN_PATH   ruta para pedir el token (por defecto /api/login/get_token)  *** POR VERIFICAR ***
- *   DIGIFACT_LOGIN_USER   usuario completo del login (por defecto GT.<NIT>.<USUARIO>)   *** POR VERIFICAR ***
+ *   DIGIFACT_LOGIN_PATH   ruta para pedir el token (por defecto /api/login/get_token)
+ *   DIGIFACT_LOGIN_USER   usuario completo del login (por defecto GT.<NIT de 12 dígitos>.<USUARIO>)
+ *   La respuesta del login trae { "token": "..." } (se acepta también Token).
+ *   Por verificar con Digifact real: si TAXID va con 12 dígitos, qué valores admite FORMAT y cómo se envía el token
+ *   (aquí va tal cual en la cabecera Authorization).
  *   PORT, HOST            (por defecto 3000 y 127.0.0.1)
  */
 const http = require('http');
@@ -44,17 +47,20 @@ function pedir(urlStr, { method = 'GET', headers = {}, cuerpo } = {}) {
 
 let token = null; // { valor, hasta }
 
+/** NIT sin guiones, en mayúsculas y con ceros a la izquierda hasta 12 caracteres (formato del usuario de Digifact). */
+const nit12 = nit => String(nit).toUpperCase().replace(/[^0-9K]/g, '').padStart(12, '0');
+
 function credenciales() {
   const faltan = ['DIGIFACT_USUARIO', 'DIGIFACT_CLAVE', 'DIGIFACT_NIT'].filter(k => !ENV[k]);
   if (faltan.length) throw Object.assign(new Error('Faltan variables de entorno: ' + faltan.join(', ')), { status: 500 });
   return { usuario: ENV.DIGIFACT_USUARIO, clave: ENV.DIGIFACT_CLAVE, nit: ENV.DIGIFACT_NIT };
 }
 
-/** Obtiene (y guarda en memoria) el token de Digifact. El contrato de este login está por verificar con la documentación. */
+/** Obtiene (y guarda en memoria) el token de Digifact. */
 async function obtenerToken(forzar) {
   if (!forzar && token && token.hasta > Date.now()) return token.valor;
   const { usuario, clave, nit } = credenciales();
-  const loginUser = ENV.DIGIFACT_LOGIN_USER || `GT.${nit}.${usuario}`;
+  const loginUser = ENV.DIGIFACT_LOGIN_USER || `GT.${nit12(nit)}.${usuario}`;
   const r = await pedir(BASE + (ENV.DIGIFACT_LOGIN_PATH || '/api/login/get_token'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -70,7 +76,7 @@ async function obtenerToken(forzar) {
 
 async function certificar(xml) {
   const { usuario, nit } = credenciales();
-  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit)}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
+  const url = `${BASE}/api/v2/transform/nuc?TAXID=${encodeURIComponent(nit12(nit))}&FORMAT=${encodeURIComponent(ENV.DIGIFACT_FORMAT || 'XML,HTML,PDF')}&USERNAME=${encodeURIComponent(usuario)}`;
   const enviar = async tk => pedir(url, { method: 'POST', headers: { 'Content-Type': 'application/xml', Authorization: tk }, cuerpo: xml });
   let r = await enviar(await obtenerToken(false));
   if (r.status === 401) r = await enviar(await obtenerToken(true)); // token vencido: un reintento
